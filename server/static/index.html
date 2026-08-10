@@ -121,6 +121,16 @@
   .dep-ok{stroke:var(--work);opacity:.55;}
   .dep-blocked{stroke:var(--hold);opacity:.7;stroke-dasharray:4 3;animation:dep-pulse 1.5s ease-in-out infinite;}
   @keyframes dep-pulse{0%,100%{opacity:.55;}50%{opacity:.95;}}
+  .dep-line{cursor:pointer;pointer-events:stroke;}
+  .dep-line:hover{stroke-width:3;opacity:1;}
+  .seg-highlight{outline:2px solid var(--accent);outline-offset:2px;z-index:4;position:relative;}
+
+  /* режим выбора цели для зависимости */
+  body.dep-pick{cursor:crosshair !important;}
+  body.dep-pick .seg.dep-pick-target{cursor:crosshair;}
+  body.dep-pick .seg:hover{outline:2px dashed var(--accent);outline-offset:2px;}
+  .dep-pick-line{stroke:var(--accent);stroke-width:2;stroke-dasharray:6 4;fill:none;pointer-events:none;animation:dep-pick-pulse 1s ease-in-out infinite;}
+  @keyframes dep-pick-pulse{0%,100%{opacity:.6;}50%{opacity:1;}}
 
   .track-row{height:24px;position:relative;}
   .track-row.main{
@@ -460,7 +470,7 @@ function renderTrackRow(track, roleClass, bortIdx, trackIdx){
       : (seg.kind.startsWith("hold")
           ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]} · ${dateLabel(seg.start)} · #${seg.id}`
           : `${seg.label} · ${seg.days}д · ${dateLabel(seg.start)} · #${seg.id}`);
-    const idxAttrs = `data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-seg-idx="${segIdx}"`;
+    const idxAttrs = `data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-seg-idx="${segIdx}" data-dep-id="${seg.id}"`;
     if(seg.days === 0){
       return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня" ${idxAttrs}></div>`;
     }
@@ -550,7 +560,7 @@ function renderCard(bort, idx, sharedAxisTotal){
         const midX = x1 + Math.max(8, (x2 - x1) / 2);
         const blocked = pred.status !== "done";
         const path = `M ${x1} ${y1} H ${midX} V ${y2} H ${x2}`;
-        depsLines.push(`<path d="${path}" class="dep-line ${blocked ? 'dep-blocked' : 'dep-ok'}" marker-end="url(#arrow-${idx})"/>`);
+        depsLines.push(`<path d="${path}" class="dep-line ${blocked ? 'dep-blocked' : 'dep-ok'}" data-dep-from="${predId}" data-dep-to="${s.id}" marker-end="url(#arrow-${idx})"/>`);
       });
     });
   });
@@ -706,15 +716,15 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
   const kindLabel = KIND_OPTIONS.find(k => k[0] === seg.kind)?.[1] || seg.kind;
   const onlyOneTrack = bort.tracks.length === 1;
   const onlyOneSeg = track.segments.length === 1;
-  const submenuItems = (label, hint, options) => `
-    <div class="ctx-label">${label}</div>
-    ${options.map(([v, l]) =>
-      `<div class="ctx-item" data-action="set:${label.split(' ')[0].toLowerCase()}:${v}">
-         <span>${l}</span>${v === seg[label === 'Kind' ? 'kind' : 'status'] ? '<span class="ctx-hint">●</span>' : ''}
-       </div>`
-    ).join("")}
-    <div class="ctx-sep"></div>
-  `;
+  // проверить blocked: planned с незакрытыми зависимостями
+  const blocked = (seg.depends_on || []).filter(depId => {
+    for (const t of bort.tracks){
+      for (const s of t.segments){
+        if (s.id === depId && s.status !== "done") return true;
+      }
+    }
+    return false;
+  });
   return `
     <div class="ctx-label">${bort.id} · ${track.name}</div>
     <div class="ctx-item disabled"><span>Сегмент</span><span class="ctx-hint">${seg.label}</span></div>
@@ -738,7 +748,13 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
 
     <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="set_start"><span>Старт: <span class="ctx-hint">${dateLabel(seg.start)}</span></span><span class="ctx-hint">✎</span></div>
+    ${seg.status === "planned" && blocked.length === 0
+      ? `<div class="ctx-item" data-action="activate_seg"><span>▶ Сделать активным</span></div>`
+      : seg.status === "planned" && blocked.length > 0
+        ? `<div class="ctx-item disabled"><span>⚠ Заблокировано: ${blocked.map(x => '#'+x).join(', ')}</span></div>`
+        : ""}
     <div class="ctx-item" data-action="set_deps"><span>Зависит от: <span class="ctx-hint">${(seg.depends_on && seg.depends_on.length) ? seg.depends_on.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="pick_dep_target"><span>🔗 Тянуть зависимость от сюда</span></div>
     <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
     <div class="ctx-sep"></div>
 
@@ -768,10 +784,17 @@ function showCtxMenu(x, y, bort, track, seg, idx, trackIdx, segIdx){
   ctxMenu.style.left = x + "px";
   ctxMenu.style.top = y + "px";
   ctxMenu.classList.add("show");
-  // если выходит за экран — отразить
+  // помещаем в viewport: сначала замеряем, потом сдвигаем при необходимости
   const r = ctxMenu.getBoundingClientRect();
-  if (r.right > window.innerWidth) ctxMenu.style.left = (x - r.width) + "px";
-  if (r.bottom > window.innerHeight) ctxMenu.style.top = (y - r.height) + "px";
+  const PAD = 4;
+  let nx = x, ny = y;
+  if (r.right > window.innerWidth) nx = x - r.width;
+  if (r.bottom > window.innerHeight) ny = y - r.height;
+  // clamp в пределы viewport (если меню крупное, оно "прилипнет" к краю)
+  nx = Math.max(PAD, Math.min(nx, window.innerWidth - r.width - PAD));
+  ny = Math.max(PAD, Math.min(ny, window.innerHeight - r.height - PAD));
+  ctxMenu.style.left = nx + "px";
+  ctxMenu.style.top = ny + "px";
   trackEvent("context_open", `${bort.id}/track/${trackIdx}/seg/${segIdx}`, {
     kind: seg.kind, status: seg.status, days: seg.days, start: seg.start,
   });
@@ -842,6 +865,27 @@ async function runCtxAction(action){
     apiPatch(`/api/borts/${bortId}/segments/${segId}`, {depends_on: validIds}, "зависимости обновлены");
     seg.depends_on = validIds;
     renderAll();
+    return;
+  }
+  if (action === "pick_dep_target"){
+    // запустить режим перетаскивания зависимости
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "pick_dep_target"});
+    enterDepPickMode(bortId, segId);
+    return;
+  }
+  if (action === "activate_seg"){
+    if (seg.status !== "planned") return;
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "activate_seg"});
+    fetch(API_BASE + "/api/borts/" + bortId + "/segments/" + segId + "/activate?session_id=" + encodeURIComponent(SESSION_ID), {
+      method: "POST",
+    })
+      .then(r => {
+        if (r.status === 409) throw new Error("блокировано — не все зависимости закрыты");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(() => { setStatus("сегмент активирован"); refetch(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "del_seg"){
@@ -1085,6 +1129,152 @@ function bindCardEvents(){
   });
 
   bindTooltips();
+  bindDepLineClicks();
+  bindDepPickMode();
+}
+
+// клик по стрелке зависимости → подсветить оба сегмента
+function bindDepLineClicks(){
+  document.querySelectorAll(".dep-line").forEach(p => {
+    p.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const from = p.dataset.depFrom, to = p.dataset.depTo;
+      // очистить предыдущие подсветки
+      document.querySelectorAll(".seg-highlight").forEach(el => el.classList.remove("seg-highlight"));
+      // подсветить оба сегмента
+      const allSegs = document.querySelectorAll(".seg");
+      allSegs.forEach(el => {
+        if (el.dataset && ((""+el.dataset.segIdx || "") || "")) {
+          // ищем через глобальный DATA по id — проще перебором
+        }
+      });
+      // пройдём по всем картам сегментов
+      DATA.forEach((bort, bi) => {
+        bort.tracks.forEach((t, ti) => {
+          t.segments.forEach((s, si) => {
+            if (s.id == from || s.id == to){
+              const el = document.querySelector(`.card[data-bort-idx="${bi}"] .seg[data-bort-idx="${bi}"][data-track-idx="${ti}"][data-seg-idx="${si}"]`);
+              if (el) el.classList.add("seg-highlight");
+            }
+          });
+        });
+      });
+      trackEvent("context_open", `dep-line/from-${from}/to-${to}`, {});
+      setTimeout(() => {
+        document.querySelectorAll(".seg-highlight").forEach(el => el.classList.remove("seg-highlight"));
+      }, 3000);
+    });
+  });
+}
+
+// режим выбора цели для зависимости: плюс из ctx-menu → crosshair → клик на сегменте
+function bindDepPickMode(){
+  document.querySelectorAll(".seg").forEach(seg => {
+    seg.addEventListener("click", (e) => {
+      if (!document.body.classList.contains("dep-pick")) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const targetId = Number(seg.dataset.depId);
+      const sourceId = window._depPickSource;
+      if (!targetId || !sourceId || targetId === sourceId) {
+        exitDepPickMode();
+        return;
+      }
+      // найти bort_id для target и валидировать
+      let targetBortId = null;
+      DATA.forEach(b => {
+        b.tracks.forEach(t => {
+          if (t.segments.some(s => s.id === targetId)) targetBortId = b.id;
+        });
+      });
+      // (оба сегмента в одном борте — т.к. ctx-menu вызывается на сегменте в этом борте)
+      const sourceBortId = window._depPickBortId;
+      if (targetBortId && sourceBortId && targetBortId !== sourceBortId){
+        alert("Зависимость возможна только в пределах одного борта");
+        exitDepPickMode();
+        return;
+      }
+      // добавляем targetId к depends_on источника
+      const bort = DATA.find(b => b.id === sourceBortId);
+      const segRef = findSegById(bort, sourceId);
+      if (!segRef){ exitDepPickMode(); return; }
+      const deps = (segRef.depends_on || []).slice();
+      if (!deps.includes(targetId)) deps.push(targetId);
+      trackEvent("context_action", `${sourceBortId}/seg/${sourceId}`, {action: "set_deps", deps, via: "drag"});
+      apiPatch(`/api/borts/${sourceBortId}/segments/${sourceId}`, {depends_on: deps}, "зависимость добавлена");
+      segRef.depends_on = deps;
+      exitDepPickMode();
+      renderAll();
+    });
+  });
+}
+
+function findSegById(bort, segId){
+  for (const t of bort.tracks){
+    for (const s of t.segments){
+      if (s.id === segId) return s;
+    }
+  }
+  return null;
+}
+
+function enterDepPickMode(bortId, sourceSegId){
+  window._depPickSource = sourceSegId;
+  window._depPickBortId = bortId;
+  document.body.classList.add("dep-pick");
+  setStatus("режим выбора цели: кликните на сегмент (или Esc для отмены)");
+  // прямая линия от источника к курсору
+  const srcSeg = findSegById(DATA.find(b => b.id === bortId), sourceSegId);
+  if (!srcSeg) return;
+  // добавим временный svg overlay поверх всех
+  const ov = document.createElement("div");
+  ov.id = "dep-pick-overlay";
+  ov.style.cssText = "position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:99;";
+  ov.innerHTML = '<svg width="100%" height="100%"><line id="dep-pick-line" class="dep-pick-line" x1="0" y1="0" x2="0" y2="0"/></svg>';
+  document.body.appendChild(ov);
+  // позиция источника
+  const srcBortIdx = DATA.findIndex(b => b.id === bortId);
+  const srcCard = document.querySelector(`.card[data-bort-idx="${srcBortIdx}"]`);
+  if (!srcCard) return;
+  const srcSegEl = Array.from(srcCard.querySelectorAll(".seg")).find(el => {
+    const bi = Number(el.dataset.bortIdx);
+    const ti = Number(el.dataset.trackIdx);
+    const si = Number(el.dataset.segIdx);
+    return DATA[bi].tracks[ti].segments[si].id === sourceSegId;
+  });
+  if (!srcSegEl) return;
+  const srcRect = srcSegEl.getBoundingClientRect();
+  const x1 = srcRect.left + srcRect.width;
+  const y1 = srcRect.top + srcRect.height / 2;
+  const line = document.getElementById("dep-pick-line");
+  line.setAttribute("x1", x1);
+  line.setAttribute("y1", y1);
+  line.setAttribute("x2", x1);
+  line.setAttribute("y2", y1);
+  document.addEventListener("mousemove", _depPickMousemove);
+  document.addEventListener("keydown", _depPickKeydown);
+}
+
+function _depPickMousemove(e){
+  const line = document.getElementById("dep-pick-line");
+  if (!line) return;
+  line.setAttribute("x2", e.clientX);
+  line.setAttribute("y2", e.clientY);
+}
+
+function _depPickKeydown(e){
+  if (e.key === "Escape") exitDepPickMode();
+}
+
+function exitDepPickMode(){
+  document.body.classList.remove("dep-pick");
+  window._depPickSource = null;
+  window._depPickBortId = null;
+  document.removeEventListener("mousemove", _depPickMousemove);
+  document.removeEventListener("keydown", _depPickKeydown);
+  const ov = document.getElementById("dep-pick-overlay");
+  if (ov) ov.remove();
+  setStatus("выбор отменён");
 }
 
 /*

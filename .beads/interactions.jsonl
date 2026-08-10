@@ -8,3 +8,4 @@
 {"id":"int-8e4decf4","kind":"field_change","created_at":"2026-08-10T18:56:18.937046788Z","actor":"QueryWorm","issue_id":"Gantt-xc1","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-2404e54e","kind":"field_change","created_at":"2026-08-10T19:06:34.389510683Z","actor":"QueryWorm","issue_id":"Gantt-pxo","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-29fe9a8e","kind":"field_change","created_at":"2026-08-10T19:09:25.527666382Z","actor":"QueryWorm","issue_id":"Gantt-e9v","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-6213e46b","kind":"field_change","created_at":"2026-08-10T19:22:00.210218454Z","actor":"QueryWorm","issue_id":"Gantt-pxo","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}

@@ -198,6 +198,20 @@ def mutate_bort(bort_id: str, req: MutateRequest):
             (bort_id, date_str, f"{track['name']} → {status_label_map.get(req.new_kind, req.new_kind)}",
              req.text),
         )
+
+        # каскадный сдвиг downstream planned по dependencies
+        shifted = []
+        if active is not None:
+            delta = elapsed - active["days"]
+            if delta > 0:
+                shifted = _cascade_shift_downstream(conn, active["id"], delta, set())
+                if shifted:
+                    _write_event(conn, req.session_id, "cascade_shift", bort_id, {
+                        "trigger_seg_id": active["id"],
+                        "delta": delta,
+                        "shifted": shifted,
+                    })
+
         _write_event(conn, req.session_id, "mutation", bort_id, {
             "track_id": req.track_id,
             "track_name": track["name"],
@@ -207,6 +221,30 @@ def mutate_bort(bort_id: str, req: MutateRequest):
         })
         conn.commit()
     return {"ok": True}
+
+
+def _cascade_shift_downstream(conn, pred_id: int, delta: int, visited: set) -> list[dict]:
+    """Сдвигает planned-сегменты, у которых pred_id в depends_on.
+    Затем рекурсивно проходит по их downstream. Возвращает список сдвигов."""
+    if pred_id in visited:
+        return []
+    visited.add(pred_id)
+    rows = conn.execute("SELECT id, depends_on, start, status FROM segments").fetchall()
+    shifted = []
+    for s in rows:
+        if s["status"] != "planned":
+            continue
+        try:
+            deps = _json.loads(s["depends_on"] or "[]")
+        except _json.JSONDecodeError:
+            continue
+        if pred_id not in deps:
+            continue
+        new_start = s["start"] + delta
+        conn.execute("UPDATE segments SET start = ? WHERE id = ?", (new_start, s["id"]))
+        shifted.append({"seg_id": s["id"], "old_start": s["start"], "new_start": new_start})
+        shifted.extend(_cascade_shift_downstream(conn, s["id"], delta, visited))
+    return shifted
 
 
 @app.post("/api/borts/{bort_id}/subtasks")
@@ -300,6 +338,46 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
         params.append(seg_id)
         conn.execute(f"UPDATE segments SET {', '.join(updates)} WHERE id = ?", params)
         _write_event(conn, req.session_id, "segment_patch", bort_id, changes)
+        conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/borts/{bort_id}/segments/{seg_id}/activate")
+def activate_segment(bort_id: str, seg_id: int, session_id: str = ""):
+    """Переводит planned в active. Проверяет, что все зависимости done.
+    Возвращает 409 если блокировано, 400 если уже не planned."""
+    with get_conn() as conn:
+        seg = conn.execute(
+            "SELECT s.* FROM segments s JOIN tracks t ON s.track_id = t.id "
+            "WHERE s.id = ? AND t.bort_id = ?",
+            (seg_id, bort_id),
+        ).fetchone()
+        if not seg:
+            raise HTTPException(404, f"segment {seg_id} not in bort {bort_id}")
+        if seg["status"] != "planned":
+            raise HTTPException(400, f"segment is {seg['status']}, not planned")
+
+        # зависимости
+        try:
+            deps = _json.loads(seg["depends_on"] or "[]")
+        except _json.JSONDecodeError:
+            deps = []
+        if deps:
+            placeholders = ",".join("?" * len(deps))
+            deps_rows = conn.execute(
+                f"SELECT id, status FROM segments WHERE id IN ({placeholders})",
+                deps,
+            ).fetchall()
+            blocked = [r["id"] for r in deps_rows if r["status"] != "done"]
+            if blocked:
+                raise HTTPException(409, detail={
+                    "error": "blocked_by_dependencies",
+                    "blocked": blocked,
+                    "message": "не все предшественники закрыты",
+                })
+
+        conn.execute("UPDATE segments SET status = 'active', days = 0 WHERE id = ?", (seg_id,))
+        _write_event(conn, session_id, "segment_activate", bort_id, {"seg_id": seg_id})
         conn.commit()
     return {"ok": True}
 
