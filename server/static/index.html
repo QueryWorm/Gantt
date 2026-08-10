@@ -139,6 +139,57 @@
   .dep-pick-line{stroke:var(--accent);stroke-width:2;stroke-dasharray:6 4;fill:none;pointer-events:none;animation:dep-pick-pulse 1s ease-in-out infinite;}
   @keyframes dep-pick-pulse{0%,100%{opacity:.6;}50%{opacity:1;}}
 
+  /* ---- Modal ---- */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;
+    display:flex;align-items:center;justify-content:center;padding:20px;}
+  .modal-overlay.hidden{display:none;}
+  .modal-content{background:var(--bg);border:1px solid var(--line);border-radius:10px;
+    max-width:760px;width:100%;max-height:90vh;display:flex;flex-direction:column;}
+  .modal-header{display:flex;justify-content:space-between;align-items:center;
+    padding:14px 18px;border-bottom:1px solid var(--line);}
+  .modal-header h2{margin:0;font-size:14px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.1em;color:var(--text);}
+  .modal-close{background:transparent;border:none;color:var(--muted);font-size:18px;
+    cursor:pointer;padding:2px 8px;border-radius:4px;}
+  .modal-close:hover{color:var(--text);background:var(--panel-2);}
+  .modal-body{padding:14px 18px;overflow-y:auto;flex:1;}
+  .modal-footer{padding:12px 18px;border-top:1px solid var(--line);display:flex;
+    justify-content:flex-end;gap:8px;}
+  .form-row{display:flex;gap:8px;margin-bottom:8px;align-items:center;}
+  .form-row label{font-size:11px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.06em;min-width:60px;}
+  .form-input{background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    border-radius:5px;padding:6px 10px;font-size:12px;font-family:'Inter',sans-serif;
+    flex:1;min-width:0;}
+  .form-input.small{max-width:90px;}
+  .form-btn{background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    padding:6px 12px;border-radius:5px;font-size:12px;cursor:pointer;
+    font-family:'Inter',sans-serif;}
+  .form-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .form-btn.primary{background:var(--work);color:#0c1f14;border-color:var(--work);
+    font-weight:700;}
+  .form-btn.primary:hover{filter:brightness(1.08);}
+  .form-btn.danger{color:#E15D5D;}
+  .form-btn.danger:hover{background:#3a2827;border-color:#E15D5D;}
+  .tpl-list{display:flex;flex-direction:column;gap:6px;}
+  .tpl-item{display:flex;justify-content:space-between;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:6px;
+    padding:8px 12px;}
+  .tpl-item .tpl-info{display:flex;flex-direction:column;gap:2px;}
+  .tpl-item .tpl-name{font-size:13px;font-weight:600;color:var(--text);}
+  .tpl-item .tpl-meta{font-size:11px;color:var(--muted-2);}
+  .tpl-item .tpl-actions{display:flex;gap:6px;}
+  .track-block{border:1px solid var(--line);border-radius:6px;padding:10px 12px;
+    margin-bottom:10px;background:var(--panel);}
+  .track-block .track-head{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  .track-block .track-head input[type="text"]{flex:1;}
+  .segment-block{display:flex;gap:6px;margin-bottom:6px;align-items:center;}
+  .segment-block select{font-size:11px;padding:4px 6px;max-width:130px;}
+  .segment-block input{font-size:11px;padding:5px 8px;}
+  .seg-list{margin-bottom:8px;}
+  .empty-hint{color:var(--muted-2);font-size:12px;text-align:center;padding:24px;}
+  .hidden{display:none !important;}
+
   .track-row{height:24px;position:relative;}
   .track-row.main{
     background: repeating-linear-gradient(to right, var(--line) 0, var(--line) 1px, #1c1a17 1px, #1c1a17 var(--px-per-day));
@@ -1523,70 +1574,275 @@ async function manageTemplates(){
     alert("Не удалось загрузить шаблоны: " + err.message);
     return;
   }
-  if (list.length === 0){
-    alert("Шаблонов пока нет. Создайте через кнопку 'Создать' или POST /api/templates.");
-    return;
-  }
-  const choice = prompt(
-    "Шаблоны пайплайна:\n" +
-    list.map((t, i) => `${i+1}. ${t.id} — ${t.name} (${t.tracks_count} дорожек, ${t.segments_count} сегментов)`).join("\n") +
-    "\n\nВведите номер для просмотра/удаления, или 'new' для создания нового:"
-  );
-  if (!choice) return;
-  if (choice.trim() === "new"){
-    createTemplatePrompt();
-    return;
-  }
-  const idx = parseInt(choice.trim()) - 1;
-  if (idx < 0 || idx >= list.length){
-    alert("Неверный номер");
-    return;
-  }
-  const t = list[idx];
-  const action = prompt(`Шаблон ${t.id} (${t.name}).\nВведите 'view' для просмотра, 'del' для удаления:`);
-  if (action === "view"){
-    const r = await fetch(API_BASE + "/api/templates/" + t.id);
-    if (!r.ok){ alert("ошибка загрузки"); return; }
-    const full = await r.json();
-    alert(JSON.stringify(full, null, 2));
-  } else if (action === "del"){
-    if (!confirm("Удалить шаблон " + t.id + "?")) return;
-    await fetch(API_BASE + "/api/templates/" + t.id, {method: "DELETE"});
-    setStatus("шаблон удалён");
-    manageTemplates();
+  openTemplatesModal(list);
+}
+
+const KIND_OPTIONS_TPL = [
+  ["work", "Работа"], ["test", "Тест"], ["think", "Разбор"],
+  ["hold-parts", "Холд · запчасти"],
+  ["hold-people", "Холд · человек"],
+  ["hold-approve", "Холд · решение"],
+];
+
+let _modalState = {list: [], editing: null};
+
+function openTemplatesModal(list){
+  _modalState.list = list || [];
+  _modalState.editing = null;
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.id = "tpl-modal";
+  ov.innerHTML = `
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>📋 Шаблоны пайплайна</h2>
+        <button class="modal-close" onclick="closeTemplatesModal()">×</button>
+      </div>
+      <div class="modal-body" id="tpl-modal-body"></div>
+      <div class="modal-footer" id="tpl-modal-footer"></div>
+    </div>
+  `;
+  ov.addEventListener("click", closeTemplatesModal);
+  document.body.appendChild(ov);
+  renderTemplatesModal();
+}
+
+function closeTemplatesModal(){
+  const ov = document.getElementById("tpl-modal");
+  if (ov) ov.remove();
+  _modalState.editing = null;
+}
+
+function renderTemplatesModal(){
+  const body = document.getElementById("tpl-modal-body");
+  const footer = document.getElementById("tpl-modal-footer");
+  if (_modalState.editing){
+    renderTemplateForm(body, footer);
+  } else {
+    renderTemplateList(body, footer);
   }
 }
 
-function createTemplatePrompt(){
-  const id = prompt("ID шаблона (например fpv-ptz):");
-  if (!id || !id.trim()) return;
-  const name = prompt("Название шаблона:");
-  if (!name || !name.trim()) return;
-  const json = prompt(
-    "Вставьте JSON с треками:\n" +
-    '{"tracks":[{"name":"Главный","sub":false,"segments":[{"kind":"think","label":"Разбор","days":1},{"kind":"work","label":"Прошивка","days":3}]}]}'
-  );
-  if (!json) return;
-  let defn;
-  try { defn = JSON.parse(json); } catch(e){ alert("Невалидный JSON: " + e.message); return; }
-  if (!defn.tracks || !Array.isArray(defn.tracks)){ alert("Нет поля tracks (массив)"); return; }
-  fetch(API_BASE + "/api/templates", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      id: id.trim(),
-      name: name.trim(),
-      tracks: defn.tracks,
-      session_id: SESSION_ID,
-    }),
-  })
-    .then(r => {
+function renderTemplateList(body, footer){
+  if (_modalState.list.length === 0){
+    body.innerHTML = `<div class="empty-hint">Шаблонов пока нет. Создайте первый.</div>`;
+  } else {
+    body.innerHTML = `<div class="tpl-list">${_modalState.list.map(t => `
+      <div class="tpl-item">
+        <div class="tpl-info">
+          <span class="tpl-name">${escapeHtml(t.name)} <span class="tpl-meta">(${escapeHtml(t.id)})</span></span>
+          <span class="tpl-meta">${t.tracks_count} дорожек · ${t.segments_count} сегментов</span>
+        </div>
+        <div class="tpl-actions">
+          <button class="form-btn" onclick="applyTemplatePrompt('${escapeHtml(t.id)}')">▶ применить</button>
+          <button class="form-btn" onclick="editTemplate('${escapeHtml(t.id)}')">править</button>
+          <button class="form-btn danger" onclick="deleteTemplate('${escapeHtml(t.id)}')">удалить</button>
+        </div>
+      </div>`).join("")}</div>`;
+  }
+  footer.innerHTML = `<button class="form-btn primary" onclick="newTemplate()">+ Новый шаблон</button>
+    <button class="form-btn" onclick="closeTemplatesModal()">Закрыть</button>`;
+}
+
+function renderTemplateForm(body, footer){
+  const ed = _modalState.editing;
+  body.innerHTML = `
+    <div class="form-row">
+      <label>ID</label>
+      <input class="form-input" id="tpl-id" value="${escapeHtml(ed.id)}" ${ed.id && !ed._isNew ? "disabled" : ""} placeholder="например fpv-ptz">
+    </div>
+    <div class="form-row">
+      <label>Название</label>
+      <input class="form-input" id="tpl-name" value="${escapeHtml(ed.name)}" placeholder="Hikvision PTZ интеграция">
+    </div>
+    <div style="margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Дорожки</label>
+        <button class="form-btn" onclick="tplAddTrack()">+ дорожка</button>
+      </div>
+      <div id="tpl-tracks"></div>
+    </div>
+  `;
+  footer.innerHTML = `<button class="form-btn" onclick="_modalState.editing=null;renderTemplatesModal()">← Назад</button>
+    <button class="form-btn" onclick="closeTemplatesModal()">Отмена</button>
+    <button class="form-btn primary" onclick="saveTemplate()">Сохранить</button>`;
+  renderTracks();
+}
+
+function renderTracks(){
+  const container = document.getElementById("tpl-tracks");
+  if (!_modalState.editing.tracks.length){
+    container.innerHTML = `<div class="empty-hint">Нет дорожек. Добавьте первую.</div>`;
+    return;
+  }
+  container.innerHTML = _modalState.editing.tracks.map((t, ti) => `
+    <div class="track-block">
+      <div class="track-head">
+        <input class="form-input" value="${escapeHtml(t.name)}" oninput="tplUpdateTrackName(${ti}, this.value)" placeholder="Название трека">
+        <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px">
+          <input type="checkbox" ${t.sub ? "checked" : ""} onchange="tplUpdateTrackSub(${ti}, this.checked)"> подзадача
+        </label>
+        <button class="form-btn danger" onclick="tplRemoveTrack(${ti})">×</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Сегменты</div>
+      <div class="seg-list">
+        ${t.segments.map((s, si) => renderSegmentRow(ti, si, s)).join("")}
+      </div>
+      <button class="form-btn" onclick="tplAddSegment(${ti})">+ сегмент</button>
+    </div>
+  `).join("");
+}
+
+function renderSegmentRow(ti, si, s){
+  const kindOpts = KIND_OPTIONS_TPL.map(([v, l]) =>
+    `<option value="${v}" ${s.kind === v ? "selected" : ""}>${l}</option>`).join("");
+  return `
+    <div class="segment-block">
+      <select class="form-input" onchange="tplUpdateSeg(${ti},${si},'kind',this.value)">${kindOpts}</select>
+      <input class="form-input" value="${escapeHtml(s.label)}" oninput="tplUpdateSeg(${ti},${si},'label',this.value)" placeholder="название">
+      <input class="form-input small" type="number" min="0" value="${s.days}" oninput="tplUpdateSeg(${ti},${si},'days',Number(this.value))" placeholder="дни">
+      <input class="form-input" value="${escapeHtml(s.dept||'')}" oninput="tplUpdateSeg(${ti},${si},'dept',this.value)" placeholder="отдел">
+      <input class="form-input" value="${escapeHtml(s.assignee||'')}" oninput="tplUpdateSeg(${ti},${si},'assignee',this.value)" placeholder="кто">
+      <button class="form-btn danger" onclick="tplRemoveSegment(${ti},${si})">×</button>
+    </div>`;
+}
+
+function tplAddTrack(){
+  _modalState.editing.tracks.push({name: "Новая дорожка", sub: false, segments: []});
+  renderTracks();
+}
+function tplUpdateTrackName(i, v){ _modalState.editing.tracks[i].name = v; }
+function tplUpdateTrackSub(i, v){ _modalState.editing.tracks[i].sub = v; }
+function tplRemoveTrack(i){
+  if (!confirm("Удалить дорожку?")) return;
+  _modalState.editing.tracks.splice(i, 1);
+  renderTracks();
+}
+function tplAddSegment(ti){
+  _modalState.editing.tracks[ti].segments.push({kind: "work", label: "Работа", days: 1, dept: "", assignee: ""});
+  renderTracks();
+}
+function tplUpdateSeg(ti, si, field, v){ _modalState.editing.tracks[ti].segments[si][field] = v; }
+function tplRemoveSegment(ti, si){
+  _modalState.editing.tracks[ti].segments.splice(si, 1);
+  renderTracks();
+}
+
+function newTemplate(){
+  _modalState.editing = {
+    id: "",
+    name: "",
+    tracks: [{name: "Главный", sub: false, segments: [{kind: "think", label: "Разбор", days: 1, dept: "", assignee: ""}]}],
+    _isNew: true,
+  };
+  renderTemplatesModal();
+}
+
+async function editTemplate(id){
+  try {
+    const r = await fetch(API_BASE + "/api/templates/" + id);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const full = await r.json();
+    _modalState.editing = full;
+    renderTemplatesModal();
+  } catch(err){
+    alert("ошибка загрузки: " + err.message);
+  }
+}
+
+async function deleteTemplate(id){
+  if (!confirm("Удалить шаблон " + id + "?")) return;
+  try {
+    await fetch(API_BASE + "/api/templates/" + id, {method: "DELETE"});
+    const r = await fetch(API_BASE + "/api/templates");
+    _modalState.list = await r.json();
+    renderTemplatesModal();
+    setStatus("шаблон удалён");
+  } catch(err){
+    alert("ошибка: " + err.message);
+  }
+}
+
+async function saveTemplate(){
+  const id = document.getElementById("tpl-id").value.trim();
+  const name = document.getElementById("tpl-name").value.trim();
+  if (!id) return alert("ID обязателен");
+  if (!name) return alert("Название обязательно");
+  if (!_modalState.editing.tracks.length) return alert("Нужна хотя бы одна дорожка");
+  for (const t of _modalState.editing.tracks){
+    if (!t.name.trim()) return alert("У каждой дорожки должно быть название");
+  }
+  const isNew = _modalState.editing._isNew;
+  try {
+    if (isNew){
+      const r = await fetch(API_BASE + "/api/templates", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          id, name,
+          tracks: _modalState.editing.tracks,
+          session_id: SESSION_ID,
+        }),
+      });
       if (r.status === 409) throw new Error("уже существует");
       if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
-    })
-    .then(() => setStatus("шаблон создан"))
-    .catch(err => alert("ошибка: " + err.message));
+      setStatus("шаблон создан");
+    } else {
+      // удалить и пересоздать (нет PATCH шаблона — проще так)
+      await fetch(API_BASE + "/api/templates/" + id, {method: "DELETE"});
+      const r = await fetch(API_BASE + "/api/templates", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          id, name,
+          tracks: _modalState.editing.tracks,
+          session_id: SESSION_ID,
+        }),
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      setStatus("шаблон обновлён");
+    }
+    // обновить список
+    const r = await fetch(API_BASE + "/api/templates");
+    _modalState.list = await r.json();
+    _modalState.editing = null;
+    renderTemplatesModal();
+  } catch(err){
+    alert("ошибка: " + err.message);
+  }
+}
+
+async function applyTemplatePrompt(tplId){
+  // список бортов
+  const list = DATA.map(b => `${b.id} — ${b.desc}`).join("\n");
+  const choice = prompt(`Применить шаблон ${tplId} к какому борту?\nВведите ID борта:\n` + list);
+  if (!choice) return;
+  const bortId = choice.trim().toUpperCase();
+  if (!DATA.some(b => b.id === bortId)){ alert("борт не найден"); return; }
+  try {
+    const r = await fetch(API_BASE + "/api/borts/" + bortId + "/apply_template", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        template_id: tplId,
+        today_index: TODAY_INDEX,
+        session_id: SESSION_ID,
+      }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    setStatus("применено: +" + d.tracks_added + " дорожек, +" + d.segments_added + " сегментов");
+    closeTemplatesModal();
+    refetch();
+  } catch(err){
+    alert("ошибка: " + err.message);
+  }
+}
+
+function escapeHtml(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[c]);
 }
 
 async function createNewBort(){
