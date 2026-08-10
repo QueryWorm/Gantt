@@ -16,6 +16,8 @@ class Segment(BaseModel):
     depends_on: list[int] = Field(default_factory=list)
     dept: str = ""
     assignee: str = ""
+    tpl_start: Optional[int] = None
+    tpl_days: Optional[int] = None
 
 
 class Track(BaseModel):

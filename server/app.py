@@ -63,6 +63,8 @@ def _row_to_segment(r) -> dict:
         "depends_on": depends_on,
         "dept": r["dept"] or "",
         "assignee": r["assignee"] or "",
+        "tpl_start": r["tpl_start"],
+        "tpl_days": r["tpl_days"],
     }
 
 
@@ -1051,10 +1053,10 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
                     start = track_cursor
                 days = max(0, int(s["days"]))
                 scur = conn.execute(
-                    "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
-                    "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?)",
+                    "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee, tpl_start, tpl_days) "
+                    "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)",
                     (track_id, s["kind"], s["label"], start, days, s_idx,
-                     s["dept"] or "", s["assignee"] or ""),
+                     s["dept"] or "", s["assignee"] or "", start, days),
                 )
                 seg_id_map[s["id"]] = scur.lastrowid
                 try:

@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS segments (
     ord         INTEGER NOT NULL DEFAULT 0,
     depends_on  TEXT NOT NULL DEFAULT '[]',
     dept        TEXT NOT NULL DEFAULT '',
-    assignee    TEXT NOT NULL DEFAULT ''
+    assignee    TEXT NOT NULL DEFAULT '',
+    tpl_start   INTEGER,
+    tpl_days    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_segments_track ON segments(track_id, ord);
 
@@ -133,6 +135,11 @@ def init_db() -> None:
             conn.execute("ALTER TABLE segments ADD COLUMN dept TEXT NOT NULL DEFAULT ''")
         if "assignee" not in scols:
             conn.execute("ALTER TABLE segments ADD COLUMN assignee TEXT NOT NULL DEFAULT ''")
+        # миграция: план из шаблона (tpl_start/tpl_days) в segments если старая БД
+        if "tpl_start" not in scols:
+            conn.execute("ALTER TABLE segments ADD COLUMN tpl_start INTEGER")
+        if "tpl_days" not in scols:
+            conn.execute("ALTER TABLE segments ADD COLUMN tpl_days INTEGER")
         # миграция: шаблоны переехали с JSON на нормальные таблицы
         # Если в templates ещё есть колонка definition — сбрасываем (старые шаблоны теряются)
         # В активной разработке это безопасно; в продакшене нужна полноценная миграция

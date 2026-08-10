@@ -246,6 +246,10 @@
   .seg-stub.st-active{box-shadow:0 0 0 4px rgba(237,232,227,.14);animation:stubpulse 1.6s ease-in-out infinite;}
   @keyframes stubpulse{0%,100%{box-shadow:0 0 0 3px rgba(237,232,227,.10);}50%{box-shadow:0 0 0 6px rgba(237,232,227,.20);}}
 
+  /* план из шаблона: тонкая пунктирная подложка под фактом — видно удлинение/усадку факта */
+  .seg-plan{position:absolute;bottom:2px;height:6px;border:1px dashed rgba(160,160,160,.55);
+    background:rgba(160,160,160,.18);border-radius:2px;pointer-events:none;z-index:1;}
+
   /* невидимая зона на всю строку: ПКМ по пустому месту — добавить задачу */
   .seg-empty{position:absolute;inset:0;width:100%;z-index:0;cursor:default;}
 
@@ -348,9 +352,11 @@
         <button class="file-btn" id="new-bort-btn" title="Создать новый ремонт (борт)">+ ремонт</button>
         <button class="file-btn" id="templates-btn" title="Управление шаблонами">📋 Шаблоны</button>
         <button class="file-btn" id="seed-test-btn" title="Сгенерировать тестовые борта с исполнителями">🧪 Тест</button>
+        <button class="file-btn" id="day-back-btn" title="День назад — тест незакрытых задач">◀ день</button>
+        <button class="file-btn" id="day-fwd-btn" title="День вперёд — тест незакрытых задач">день ▶</button>
       </div>
       <div class="file-status" id="file-status">данные только в этой вкладке — не сохраняются</div>
-      <div class="clock">Обновлено <b>сегодня</b><br>09.08.2026</div>
+      <div class="clock">Обновлено <b>сегодня</b><br><span id="clock-date">09.08.2026</span></div>
     </div>
   </div>
 
@@ -403,7 +409,7 @@
 
 const EPOCH_DATE = new Date(2026, 6, 19);  // 19.07.2026 — день 0
 const TODAY_DATE  = new Date(2026, 7, 9);  // 09.08.2026 — "сегодня"
-const TODAY_INDEX = Math.round((TODAY_DATE - EPOCH_DATE) / 86400000);
+let TODAY_INDEX = Math.round((TODAY_DATE - EPOCH_DATE) / 86400000);
 
 const API_BASE = "http://127.0.0.1:8765";
 const SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) ||
@@ -553,11 +559,14 @@ function renderTrackRow(track, roleClass, bortIdx, trackIdx){
           : `${seg.label} · ${seg.days}д · ${dateLabel(seg.start)} · #${seg.id}`);
     const tip = deptAssignee ? `${baseTip} · ${deptAssignee}` : baseTip;
     const idxAttrs = `data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-seg-idx="${segIdx}" data-dep-id="${seg.id}"`;
+    const planHtml = (seg.tpl_start != null && seg.tpl_days != null && seg.tpl_days > 0)
+      ? `<div class="seg-plan" style="left:${seg.tpl_start * PX_PER_DAY}px;width:${seg.tpl_days * PX_PER_DAY}px" data-tip="${seg.label} · план ${seg.tpl_days}д · ${dateLabel(seg.tpl_start)}"></div>`
+      : "";
     if(seg.days === 0){
-      return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня" ${idxAttrs}></div>`;
+      return planHtml + `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня" ${idxAttrs}></div>`;
     }
     const text = width > 50 ? seg.label : "";
-    return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip}" ${idxAttrs}>${text}</div>`;
+    return planHtml + `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip}" ${idxAttrs}>${text}</div>`;
   }).join("");
   return `<div class="track-row ${roleClass}">
     <div class="seg-empty" data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-dep-id="-1"></div>
@@ -819,7 +828,7 @@ function renderTemplateCard(tpl, idx, chartWidth){
 
 const tooltip = document.getElementById("tooltip");
 function bindTooltips(){
-  document.querySelectorAll(".seg, .seg-empty, .seg-stub").forEach(seg=>{
+  document.querySelectorAll(".seg, .seg-empty, .seg-stub, .seg-plan").forEach(seg=>{
     const tip = seg.dataset.tip;
     seg.addEventListener("mousemove", e=>{
       if (!tip) return;
@@ -1300,6 +1309,17 @@ async function refetch(){
       refetch();
     }
   }
+}
+
+// сдвиг «сегодня» для теста незакрытых задач: удлиняет active-факт и двигает сегодня-линию
+function shiftToday(delta){
+  TODAY_INDEX = Math.max(0, TODAY_INDEX + delta);
+  const d = new Date(EPOCH_DATE);
+  d.setDate(d.getDate() + TODAY_INDEX);
+  const pad = n => String(n).padStart(2, "0");
+  document.getElementById("clock-date").textContent =
+    pad(d.getDate()) + "." + pad(d.getMonth() + 1) + "." + d.getFullYear();
+  refetch();
 }
 
 // закрытие контекстного меню
@@ -1809,6 +1829,8 @@ document.getElementById("load-input").addEventListener("change", e=>{
 document.getElementById("new-bort-btn").addEventListener("click", createNewBort);
 document.getElementById("templates-btn").addEventListener("click", manageTemplates);
 document.getElementById("seed-test-btn").addEventListener("click", seedTest);
+document.getElementById("day-back-btn").addEventListener("click", () => shiftToday(-1));
+document.getElementById("day-fwd-btn").addEventListener("click", () => shiftToday(1));
 
 async function seedTest(){
   if (!confirm("Сгенерировать 5 тестовых бортов с исполнителями? Перезапишет одноимённые.")) return;
