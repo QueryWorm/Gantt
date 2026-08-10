@@ -115,6 +115,13 @@
   .gantt-chart-scroll::-webkit-scrollbar-thumb{background:#1a1815;border-radius:3px;}
   .gantt-chart-inner{position:relative;}
 
+  /* ---- dependency arrows ---- */
+  .deps-overlay{position:absolute;left:0;top:0;pointer-events:none;z-index:3;overflow:visible;}
+  .dep-line{fill:none;stroke-width:1.5;stroke-linejoin:miter;stroke-linecap:butt;}
+  .dep-ok{stroke:var(--work);opacity:.55;}
+  .dep-blocked{stroke:var(--hold);opacity:.7;stroke-dasharray:4 3;animation:dep-pulse 1.5s ease-in-out infinite;}
+  @keyframes dep-pulse{0%,100%{opacity:.55;}50%{opacity:.95;}}
+
   .track-row{height:24px;position:relative;}
   .track-row.main{
     background: repeating-linear-gradient(to right, var(--line) 0, var(--line) 1px, #1c1a17 1px, #1c1a17 var(--px-per-day));
@@ -445,14 +452,14 @@ function buildRuler(minStart, axisTotal){
 function renderTrackRow(track, roleClass, bortIdx, trackIdx){
   const segHtml = track.segments.map((seg, segIdx) => {
     const left = seg.start * PX_PER_DAY;
-    const width = seg.days * PX_PER_DAY;
+    const width = (seg.status === "active" ? Math.max(0, TODAY_INDEX - seg.start) : seg.days) * PX_PER_DAY;
     const kindClass = seg.kind;
     const statusClass = "st-" + seg.status;
     const tip = seg.status === "planned"
-      ? `${seg.label} · план ${seg.days}д · ${dateLabel(seg.start)}`
+      ? `${seg.label} · план ${seg.days}д · ${dateLabel(seg.start)} · #${seg.id}`
       : (seg.kind.startsWith("hold")
-          ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]} · ${dateLabel(seg.start)}`
-          : `${seg.label} · ${seg.days}д · ${dateLabel(seg.start)}`);
+          ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]} · ${dateLabel(seg.start)} · #${seg.id}`
+          : `${seg.label} · ${seg.days}д · ${dateLabel(seg.start)} · #${seg.id}`);
     const idxAttrs = `data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-seg-idx="${segIdx}"`;
     if(seg.days === 0){
       return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня" ${idxAttrs}></div>`;
@@ -507,6 +514,55 @@ function renderCard(bort, idx, sharedAxisTotal){
                       <div class="merge-dot" style="left:${cx}px;top:${mainH-3}px"></div>`;
   }
 
+  // SVG overlay со стрелками зависимостей
+  const ROW_H = 24, GAP = 5, MAIN_H = 24;
+  const rowY = (trackIdx) => trackIdx === 0 ? 0 : MAIN_H + GAP + (trackIdx - 1) * ROW_H;
+  const totalRows = bort.tracks.length;
+  const svgHeight = totalRows === 1 ? MAIN_H : MAIN_H + GAP + (totalRows - 1) * ROW_H;
+
+  // собираем все segs borta с их координатами
+  const segMap = new Map(); // seg_id → {x1, y, w, status}
+  bort.tracks.forEach((t, ti) => {
+    const y = rowY(ti) + ROW_H / 2;
+    t.segments.forEach(s => {
+      if (!s.id) return;
+      segMap.set(s.id, {
+        x_end: (s.start + s.days) * PX_PER_DAY,
+        x_start: s.start * PX_PER_DAY,
+        y: y,
+        status: s.status,
+      });
+    });
+  });
+
+  const depsLines = [];
+  bort.tracks.forEach((t, ti) => {
+    t.segments.forEach(s => {
+      if (!s.depends_on || !s.depends_on.length) return;
+      s.depends_on.forEach(predId => {
+        const pred = segMap.get(predId);
+        const dep = segMap.get(s.id);
+        if (!pred || !dep) return;
+        const x1 = pred.x_end;
+        const y1 = pred.y;
+        const x2 = dep.x_start;
+        const y2 = dep.y;
+        const midX = x1 + Math.max(8, (x2 - x1) / 2);
+        const blocked = pred.status !== "done";
+        const path = `M ${x1} ${y1} H ${midX} V ${y2} H ${x2}`;
+        depsLines.push(`<path d="${path}" class="dep-line ${blocked ? 'dep-blocked' : 'dep-ok'}" marker-end="url(#arrow-${idx})"/>`);
+      });
+    });
+  });
+  const depsSvg = `<svg class="deps-overlay" width="${chartWidth}" height="${svgHeight}" style="width:${chartWidth}px;height:${svgHeight}px">
+    <defs>
+      <marker id="arrow-${idx}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted-2)"/>
+      </marker>
+    </defs>
+    ${depsLines.join("")}
+  </svg>`;
+
   const stats = computeStats(bort);
   const statsHtml = `
     <span>Работа: <span class="num">${stats.work}д</span></span>
@@ -538,9 +594,10 @@ function renderCard(bort, idx, sharedAxisTotal){
     <div class="gantt">
       <div class="gantt-labels">${labelsHtml}</div>
       <div class="gantt-chart-scroll" id="chart-scroll-${idx}">
-        <div class="gantt-chart-inner" style="width:${chartWidth}px">
+        <div class="gantt-chart-inner" style="width:${chartWidth}px;height:${svgHeight}px">
           ${rowsHtml}
           ${connectorHtml}
+          ${depsSvg}
           <div class="today-line" style="left:${todayLeft}px">
             <div class="today-tag">сегодня ${dateLabel(TODAY_INDEX)}</div>
           </div>
@@ -681,6 +738,7 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
 
     <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="set_start"><span>Старт: <span class="ctx-hint">${dateLabel(seg.start)}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="set_deps"><span>Зависит от: <span class="ctx-hint">${(seg.depends_on && seg.depends_on.length) ? seg.depends_on.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
     <div class="ctx-sep"></div>
 
@@ -767,6 +825,23 @@ async function runCtxAction(action){
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_start", start: n});
     apiPatch(`/api/borts/${bortId}/segments/${segId}`, {start: n}, "старт обновлён");
     seg.start = n; renderAll();
+    return;
+  }
+  if (action === "set_deps"){
+    const cur = (seg.depends_on || []).join(", ");
+    const v = prompt("ID предшественников через запятую (ID видны в tooltip после #).\nПусто — без зависимостей.", cur);
+    if (v === null) return;
+    const ids = v.split(",").map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0);
+    // валидация: ID должны существовать в этом борте
+    const validIds = [];
+    for (const tid of ids){
+      const found = bort.tracks.some(t => t.segments.some(s => s.id === tid));
+      if (found) validIds.push(tid);
+    }
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_deps", deps: validIds});
+    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {depends_on: validIds}, "зависимости обновлены");
+    seg.depends_on = validIds;
+    renderAll();
     return;
   }
   if (action === "del_seg"){

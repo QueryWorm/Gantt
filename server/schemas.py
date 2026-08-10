@@ -13,6 +13,7 @@ class Segment(BaseModel):
     days: int
     status: str
     ord: int = 0
+    depends_on: list[int] = Field(default_factory=list)
 
 
 class Track(BaseModel):
