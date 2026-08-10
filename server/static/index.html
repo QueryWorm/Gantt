@@ -826,7 +826,7 @@ function renderTemplateCard(tpl, idx, chartWidth){
 
 const tooltip = document.getElementById("tooltip");
 function bindTooltips(){
-  document.querySelectorAll(".seg, .seg-empty").forEach(seg=>{
+  document.querySelectorAll(".seg, .seg-empty, .seg-stub").forEach(seg=>{
     const tip = seg.dataset.tip;
     seg.addEventListener("mousemove", e=>{
       tooltip.textContent = tip;
@@ -1148,13 +1148,18 @@ async function runCtxAction(action){
   if (action === "add_seg_here"){
     const v = prompt("Название задачи в треке «" + track.name + "»:", "");
     if (v === null || !v.trim()) return;
-    trackEvent("context_action", `${bortId}/track/${trackId}`, {action: "add_seg_here", label: v.trim()});
+    const d = prompt("Длительность (дней):", "1");
+    if (d === null) return;
+    let days = Number(d);
+    if (!Number.isFinite(days) || days < 0){ alert("Должно быть числом ≥ 0"); return; }
+    days = Math.floor(days);
+    trackEvent("context_action", `${bortId}/track/${trackId}`, {action: "add_seg_here", label: v.trim(), days});
     const url = isTpl
       ? API_BASE + "/api/templates/" + bortId + "/tracks/" + trackId + "/segments"
       : API_BASE + "/api/borts/" + bortId + "/tracks/" + trackId + "/segments";
     const body = isTpl
-      ? {kind: "work", label: v.trim(), days: 0, session_id: SESSION_ID}
-      : {kind: "work", label: v.trim(), days: 0, today_index: TODAY_INDEX, session_id: SESSION_ID};
+      ? {kind: "work", label: v.trim(), days, session_id: SESSION_ID}
+      : {kind: "work", label: v.trim(), days, today_index: TODAY_INDEX, session_id: SESSION_ID};
     fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(() => { setStatus("задача добавлена"); refetch(); })
