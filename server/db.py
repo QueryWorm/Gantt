@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS segments (
     days        INTEGER NOT NULL,
     status      TEXT NOT NULL,
     ord         INTEGER NOT NULL DEFAULT 0,
-    depends_on  TEXT NOT NULL DEFAULT '[]'
+    depends_on  TEXT NOT NULL DEFAULT '[]',
+    dept        TEXT NOT NULL DEFAULT '',
+    assignee    TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_segments_track ON segments(track_id, ord);
 
@@ -102,6 +104,12 @@ def init_db() -> None:
         bcols = {r["name"] for r in conn.execute("PRAGMA table_info(borts)").fetchall()}
         if "dept" not in bcols:
             conn.execute("ALTER TABLE borts ADD COLUMN dept TEXT NOT NULL DEFAULT ''")
+        # миграция: добавить dept/assignee в segments если старая БД
+        scols = {r["name"] for r in conn.execute("PRAGMA table_info(segments)").fetchall()}
+        if "dept" not in scols:
+            conn.execute("ALTER TABLE segments ADD COLUMN dept TEXT NOT NULL DEFAULT ''")
+        if "assignee" not in scols:
+            conn.execute("ALTER TABLE segments ADD COLUMN assignee TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
 

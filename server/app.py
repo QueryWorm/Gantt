@@ -58,6 +58,8 @@ def _row_to_segment(r) -> dict:
         "status": r["status"],
         "ord": r["ord"],
         "depends_on": depends_on,
+        "dept": r["dept"] or "",
+        "assignee": r["assignee"] or "",
     }
 
 
@@ -181,8 +183,8 @@ def mutate_bort(bort_id: str, req: MutateRequest):
             "hold-parts": "Холд", "hold-people": "Холд", "hold-approve": "Холд",
         }
         conn.execute(
-            "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
-            "VALUES (?, ?, ?, ?, 0, 'active', ?)",
+            "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
+            "VALUES (?, ?, ?, ?, 0, 'active', ?, '', '')",
             (req.track_id, req.new_kind, kind_label_map.get(req.new_kind, req.new_kind),
              req.today_index, max_ord + 1),
         )
@@ -269,8 +271,8 @@ def add_subtask(bort_id: str, req: SubtaskRequest):
         )
         track_id = cur.lastrowid
         conn.execute(
-            "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
-            "VALUES (?, 'work', 'Работа', ?, 0, 'active', 0)",
+            "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
+            "VALUES (?, 'work', 'Работа', ?, 0, 'active', 0, '', '')",
             (track_id, req.today_index),
         )
         from datetime import datetime, timedelta
@@ -336,6 +338,12 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
         if req.depends_on is not None:
             updates.append("depends_on = ?"); params.append(_json.dumps(req.depends_on))
             changes["depends_on"] = req.depends_on
+        if req.dept is not None:
+            updates.append("dept = ?"); params.append(req.dept)
+            changes["dept"] = req.dept
+        if req.assignee is not None:
+            updates.append("assignee = ?"); params.append(req.assignee)
+            changes["assignee"] = req.assignee
 
         if not updates:
             raise HTTPException(400, "nothing to update")
@@ -692,9 +700,10 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
                 start = track_cursor
                 days = max(0, int(s.get("days", 0)))
                 conn.execute(
-                    "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
-                    "VALUES (?, ?, ?, ?, ?, 'planned', ?)",
-                    (track_id, s["kind"], s.get("label", s["kind"]), start, days, s_idx),
+                    "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
+                    "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?)",
+                    (track_id, s["kind"], s.get("label", s["kind"]), start, days, s_idx,
+                     s.get("dept", ""), s.get("assignee", "")),
                 )
                 segs_added += 1
                 track_cursor += days
@@ -729,16 +738,16 @@ _TEST_DATA = [
         "dept": "механика", "assignee": "Коля", "case_start": 0, "priority": 2,
         "tracks": [
             {"name": "Прошивка электроники", "sub": False, "segments": [
-                {"kind": "think", "label": "Разбор", "start": 0, "days": 1, "status": "done"},
-                {"kind": "work", "label": "Прошивка", "start": 1, "days": 3, "status": "done"},
-                {"kind": "hold-people", "label": "Холд", "start": 6, "days": 15, "status": "active"},
-                {"kind": "test", "label": "Тест (план)", "start": 21, "days": 2, "status": "planned"},
+                {"kind": "think", "label": "Разбор", "start": 0, "days": 1, "status": "done", "dept": "телеметрия", "assignee": "Саша"},
+                {"kind": "work", "label": "Прошивка", "start": 1, "days": 3, "status": "done", "dept": "телеметрия", "assignee": "Саша"},
+                {"kind": "hold-people", "label": "Холд", "start": 6, "days": 15, "status": "active", "dept": "механика", "assignee": "Коля"},
+                {"kind": "test", "label": "Тест (план)", "start": 21, "days": 2, "status": "planned", "dept": "телеметрия", "assignee": "Саша"},
             ]},
             {"name": "Разработка кронштейна", "sub": True, "segments": [
-                {"kind": "work", "label": "Разработка", "start": 1, "days": 3, "status": "done"},
+                {"kind": "work", "label": "Разработка", "start": 1, "days": 3, "status": "done", "dept": "механика", "assignee": "Коля"},
             ]},
             {"name": "Сварка кронштейна", "sub": True, "segments": [
-                {"kind": "work", "label": "Сварка", "start": 4, "days": 2, "status": "done"},
+                {"kind": "work", "label": "Сварка", "start": 4, "days": 2, "status": "done", "dept": "механика", "assignee": "Коля"},
             ]},
         ],
         "log": [
@@ -753,10 +762,10 @@ _TEST_DATA = [
         "dept": "видео", "assignee": "Миша", "case_start": 15, "priority": 1,
         "tracks": [
             {"name": "Работа над видео", "sub": False, "segments": [
-                {"kind": "work", "label": "Замена антенны", "start": 15, "days": 2, "status": "done"},
-                {"kind": "test", "label": "Тест №1", "start": 17, "days": 1, "status": "done"},
-                {"kind": "work", "label": "Доработка", "start": 18, "days": 2, "status": "done"},
-                {"kind": "test", "label": "Тест №2", "start": 20, "days": 1, "status": "active"},
+                {"kind": "work", "label": "Замена антенны", "start": 15, "days": 2, "status": "done", "dept": "видео", "assignee": "Миша"},
+                {"kind": "test", "label": "Тест №1", "start": 17, "days": 1, "status": "done", "dept": "видео", "assignee": "Миша"},
+                {"kind": "work", "label": "Доработка", "start": 18, "days": 2, "status": "done", "dept": "телеметрия", "assignee": "Дима"},
+                {"kind": "test", "label": "Тест №2", "start": 20, "days": 1, "status": "active", "dept": "видео", "assignee": "Миша"},
                 {"kind": "work", "label": "Возврат в строй (план)", "start": 21, "days": 1, "status": "planned"},
             ]},
         ],
@@ -834,9 +843,10 @@ def seed_test_data():
                 track_id = cur.lastrowid
                 for s_idx, s in enumerate(t["segments"]):
                     conn.execute(
-                        "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (track_id, s["kind"], s["label"], s["start"], s["days"], s["status"], s_idx),
+                        "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (track_id, s["kind"], s["label"], s["start"], s["days"], s["status"], s_idx,
+                         s.get("dept", ""), s.get("assignee", "")),
                     )
             for l in b.get("log", []):
                 conn.execute(

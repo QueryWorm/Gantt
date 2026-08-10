@@ -474,11 +474,16 @@ function renderTrackRow(track, roleClass, bortIdx, trackIdx){
     const width = (seg.status === "active" ? Math.max(0, TODAY_INDEX - seg.start) : seg.days) * PX_PER_DAY;
     const kindClass = seg.kind;
     const statusClass = "st-" + seg.status;
-    const tip = seg.status === "planned"
+    const deptAssignee = [
+      seg.dept && `отдел: ${seg.dept}`,
+      seg.assignee && `👤 ${seg.assignee}`,
+    ].filter(Boolean).join(" · ");
+    const baseTip = seg.status === "planned"
       ? `${seg.label} · план ${seg.days}д · ${dateLabel(seg.start)} · #${seg.id}`
       : (seg.kind.startsWith("hold")
           ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]} · ${dateLabel(seg.start)} · #${seg.id}`
           : `${seg.label} · ${seg.days}д · ${dateLabel(seg.start)} · #${seg.id}`);
+    const tip = deptAssignee ? `${baseTip} · ${deptAssignee}` : baseTip;
     const idxAttrs = `data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-seg-idx="${segIdx}" data-dep-id="${seg.id}"`;
     if(seg.days === 0){
       return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня" ${idxAttrs}></div>`;
@@ -766,6 +771,8 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
       : seg.status === "planned" && blocked.length > 0
         ? `<div class="ctx-item disabled"><span>⚠ Заблокировано: ${blocked.map(x => '#'+x).join(', ')}</span></div>`
         : ""}
+    <div class="ctx-item" data-action="dept_seg"><span>Отдел: <span class="ctx-hint">${seg.dept || '—'}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="assign_seg"><span>Исполнитель: <span class="ctx-hint">${seg.assignee || '—'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="set_deps"><span>Зависит от: <span class="ctx-hint">${(seg.depends_on && seg.depends_on.length) ? seg.depends_on.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="pick_dep_target"><span>🔗 Тянуть зависимость от сюда</span></div>
     <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
@@ -901,6 +908,22 @@ async function runCtxAction(action){
       })
       .then(() => { setStatus("сегмент активирован"); refetch(); })
       .catch(err => setStatus("ошибка: " + err.message));
+    return;
+  }
+  if (action === "dept_seg"){
+    const v = prompt("Отдел для задачи (механика, видео, телеметрия, электроника...):", seg.dept || "");
+    if (v === null) return;
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "dept_seg", dept: v.trim()});
+    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {dept: v.trim()}, "отдел задачи обновлён");
+    seg.dept = v.trim(); renderAll();
+    return;
+  }
+  if (action === "assign_seg"){
+    const v = prompt("Исполнитель задачи (имя, опционально):", seg.assignee || "");
+    if (v === null) return;
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "assign_seg", assignee: v.trim()});
+    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {assignee: v.trim()}, "исполнитель задачи обновлён");
+    seg.assignee = v.trim(); renderAll();
     return;
   }
   if (action === "del_seg"){

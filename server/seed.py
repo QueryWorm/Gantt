@@ -38,9 +38,10 @@ def seed() -> None:
                 track_id = cur.lastrowid
                 for s_idx, s in enumerate(t["segments"]):
                     conn.execute(
-                        "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (track_id, s["kind"], s["label"], s["start"], s["days"], s["status"], s_idx),
+                        "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (track_id, s["kind"], s["label"], s["start"], s["days"], s["status"], s_idx,
+                         s.get("dept", ""), s.get("assignee", "")),
                     )
             for l in b.get("log", []):
                 conn.execute(

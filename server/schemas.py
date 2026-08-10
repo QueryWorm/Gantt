@@ -14,6 +14,8 @@ class Segment(BaseModel):
     status: str
     ord: int = 0
     depends_on: list[int] = Field(default_factory=list)
+    dept: str = ""
+    assignee: str = ""
 
 
 class Track(BaseModel):
@@ -88,6 +90,8 @@ class TemplateSegment(BaseModel):
     kind: str
     label: str
     days: int = 0
+    dept: str = ""
+    assignee: str = ""
 
 
 class TemplateRequest(BaseModel):
@@ -114,12 +118,14 @@ class EventRequest(BaseModel):
 
 
 class SegmentPatchRequest(BaseModel):
-    """PATCH /api/borts/{id}/segments/{sid} — изменить kind/status/days/start/depends_on."""
+    """PATCH /api/borts/{id}/segments/{sid} — изменить kind/status/days/start/depends_on/dept/assignee."""
     kind: Optional[str] = None
     status: Optional[str] = None
     days: Optional[int] = None
     start: Optional[int] = None
     depends_on: Optional[list[int]] = None
+    dept: Optional[str] = None
+    assignee: Optional[str] = None
     session_id: str = ""
 
 
