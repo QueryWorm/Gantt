@@ -606,6 +606,10 @@ def _load_template_full(conn, template_id: str) -> dict | None:
         track_cursor = 0
         out_segments = []
         for s in segs:
+            try:
+                depends_on = _json.loads(s["depends_on"]) if s["depends_on"] else []
+            except (_json.JSONDecodeError, KeyError):
+                depends_on = []
             out_segments.append({
                 "id": s["id"],
                 "kind": s["kind"],
@@ -613,6 +617,7 @@ def _load_template_full(conn, template_id: str) -> dict | None:
                 "start": track_cursor,
                 "days": s["days"],
                 "status": "planned",
+                "depends_on": depends_on,
                 "dept": s["dept"] or "",
                 "assignee": s["assignee"] or "",
             })
@@ -813,6 +818,10 @@ def patch_template_segment(template_id: str, track_id: int, seg_id: int, req: Te
             updates.append("dept = ?"); params.append(req.dept); changes["dept"] = req.dept
         if req.assignee is not None:
             updates.append("assignee = ?"); params.append(req.assignee); changes["assignee"] = req.assignee
+        if req.depends_on is not None:
+            updates.append("depends_on = ?")
+            params.append(_json.dumps(req.depends_on, ensure_ascii=False))
+            changes["depends_on"] = req.depends_on
         if not updates:
             raise HTTPException(400, "nothing to update")
         params.append(seg_id)
@@ -855,11 +864,12 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
         max_track_ord = conn.execute(
             "SELECT COALESCE(MAX(ord), -1) FROM tracks WHERE bort_id = ?", (bort_id,),
         ).fetchone()[0]
-        cursor = req.today_index
         tracks = conn.execute(
             "SELECT * FROM template_tracks WHERE template_id = ? ORDER BY ord, id",
             (req.template_id,),
         ).fetchall()
+        seg_id_map = {}
+        pending_deps = []
         for t in tracks:
             max_track_ord += 1
             cur = conn.execute(
@@ -868,7 +878,9 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
             )
             track_id = cur.lastrowid
             tracks_added += 1
-            track_cursor = cursor
+            # каждый трек стартует параллельно с req.today_index;
+            # внутри трека сегменты идут последовательно (как в шаблоне)
+            track_cursor = req.today_index
             segs = conn.execute(
                 "SELECT * FROM template_segments WHERE track_id = ? ORDER BY ord, id",
                 (t["id"],),
@@ -876,15 +888,29 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
             for s_idx, s in enumerate(segs):
                 start = track_cursor
                 days = max(0, int(s["days"]))
-                conn.execute(
+                scur = conn.execute(
                     "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
                     "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?)",
                     (track_id, s["kind"], s["label"], start, days, s_idx,
                      s["dept"] or "", s["assignee"] or ""),
                 )
+                seg_id_map[s["id"]] = scur.lastrowid
+                try:
+                    deps = _json.loads(s["depends_on"]) if s["depends_on"] else []
+                except (_json.JSONDecodeError, KeyError):
+                    deps = []
+                if deps:
+                    pending_deps.append((scur.lastrowid, deps))
                 segs_added += 1
                 track_cursor += days
-            cursor = max(cursor, track_cursor)
+        # проставить зависимости с маппингом template_segment.id -> segments.id
+        for new_seg_id, deps in pending_deps:
+            mapped = [seg_id_map.get(d, d) for d in deps if d in seg_id_map]
+            if mapped:
+                conn.execute(
+                    "UPDATE segments SET depends_on = ? WHERE id = ?",
+                    (_json.dumps(mapped), new_seg_id),
+                )
 
         _write_event(conn, req.session_id, "template_apply", bort_id, {
             "template_id": req.template_id,

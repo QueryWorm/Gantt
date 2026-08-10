@@ -86,6 +86,7 @@ class TemplateTrack(BaseModel):
 
 
 class TemplateSegment(BaseModel):
+    id: Optional[int] = None
     kind: str
     label: str
     days: int = 0
@@ -93,6 +94,7 @@ class TemplateSegment(BaseModel):
     assignee: str = ""
     start: int = 0
     status: str = "planned"
+    depends_on: list[int] = Field(default_factory=list)
 
 
 class TemplateRequest(BaseModel):
@@ -145,6 +147,7 @@ class TemplateSegmentPatchRequest(BaseModel):
     days: Optional[int] = None
     dept: Optional[str] = None
     assignee: Optional[str] = None
+    depends_on: Optional[list[int]] = None
     session_id: str = ""
 
 

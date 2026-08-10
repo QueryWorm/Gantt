@@ -231,7 +231,11 @@
   .seg.st-active::after{content:'';position:absolute;right:0;top:0;bottom:0;width:3px;background:#fff;
     opacity:.55;animation:pulse 1.6s ease-in-out infinite;}
   @keyframes pulse{0%,100%{opacity:.15;}50%{opacity:.85;}}
-  .seg.st-planned{background:transparent!important;border:1.5px dashed var(--muted);color:var(--muted);opacity:1;}
+  .seg.st-planned{background:transparent!important;border:1.5px dashed currentColor;opacity:1;color:var(--muted);}
+  .seg.st-planned.work{border-color:var(--work);color:var(--work);}
+  .seg.st-planned.test{border-color:var(--test);color:var(--test);}
+  .seg.st-planned.think{border-color:var(--think);color:var(--think);}
+  .seg.st-planned.hold-parts,.seg.st-planned.hold-people,.seg.st-planned.hold-approve{border-color:var(--hold);color:var(--hold);}
 
   /* только что стартовавший сегмент (0 дней) — честная точка, а не выдуманный день */
   .seg-stub{position:absolute;top:7px;width:10px;height:10px;border-radius:50%;
@@ -881,6 +885,8 @@ function renderTemplateCtxMenu(bort, track, seg){
     <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="dept_seg"><span>Отдел: <span class="ctx-hint">${seg.dept || '—'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="assign_seg"><span>Исполнитель: <span class="ctx-hint">${seg.assignee || '—'}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="set_deps"><span>Зависит от: <span class="ctx-hint">${(seg.depends_on && seg.depends_on.length) ? seg.depends_on.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="pick_dep_target"><span>🔗 Тянуть зависимость от сюда</span></div>
     <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
     <div class="ctx-sep"></div>
 
@@ -1268,8 +1274,16 @@ window.addEventListener("resize", hideCtxMenu);
 
 // все таймлайны (общая линейка + каждая карточка) скроллятся синхронно
 function bindSyncedScroll(){
-  const scrollers = [document.getElementById("ruler-scroll"),
-    ...document.querySelectorAll(".gantt-chart-scroll")];
+  // борты + общая линейка скроллятся вместе; шаблоны — отдельно (своя группа)
+  const bortScrollers = [document.getElementById("ruler-scroll"),
+    ...document.querySelectorAll(".card:not(.is-template) .gantt-chart-scroll")];
+  const tplScrollers = [...document.querySelectorAll(".card.is-template .gantt-chart-scroll")];
+  bindScrollGroup(bortScrollers);
+  bindScrollGroup(tplScrollers);
+}
+
+function bindScrollGroup(scrollers){
+  if (!scrollers.length) return;
   let syncing = false;
   let scrollDebounce = null;
   scrollers.forEach(el=>{
@@ -1454,23 +1468,9 @@ function bindDepLineClicks(){
       const from = p.dataset.depFrom, to = p.dataset.depTo;
       // очистить предыдущие подсветки
       document.querySelectorAll(".seg-highlight").forEach(el => el.classList.remove("seg-highlight"));
-      // подсветить оба сегмента
-      const allSegs = document.querySelectorAll(".seg");
-      allSegs.forEach(el => {
-        if (el.dataset && ((""+el.dataset.segIdx || "") || "")) {
-          // ищем через глобальный DATA по id — проще перебором
-        }
-      });
-      // пройдём по всем картам сегментов
-      DATA.forEach((bort, bi) => {
-        bort.tracks.forEach((t, ti) => {
-          t.segments.forEach((s, si) => {
-            if (s.id == from || s.id == to){
-              const el = document.querySelector(`.card[data-bort-idx="${bi}"] .seg[data-bort-idx="${bi}"][data-track-idx="${ti}"][data-seg-idx="${si}"]`);
-              if (el) el.classList.add("seg-highlight");
-            }
-          });
-        });
+      // подсветить оба сегмента (и для бортов, и для шаблонов) по data-dep-id
+      document.querySelectorAll(".seg").forEach(el => {
+        if (el.dataset.depId == from || el.dataset.depId == to) el.classList.add("seg-highlight");
       });
       trackEvent("context_open", `dep-line/from-${from}/to-${to}`, {});
       setTimeout(() => {
@@ -1478,6 +1478,10 @@ function bindDepLineClicks(){
       }, 3000);
     });
   });
+}
+
+function containerById(id){
+  return (DATA || []).find(b => b.id === id) || (TEMPLATES || []).find(t => t.id === id);
 }
 
 // режим выбора цели для зависимости: плюс из ctx-menu → crosshair → клик на сегменте
@@ -1493,28 +1497,39 @@ function bindDepPickMode(){
         exitDepPickMode();
         return;
       }
-      // найти bort_id для target и валидировать
-      let targetBortId = null;
-      DATA.forEach(b => {
+      // найти владельца (борт или шаблон) target и валидировать
+      let targetOwnerId = null;
+      (DATA.concat(TEMPLATES)).forEach(b => {
         b.tracks.forEach(t => {
-          if (t.segments.some(s => s.id === targetId)) targetBortId = b.id;
+          if (t.segments.some(s => s.id === targetId)) targetOwnerId = b.id;
         });
       });
-      // (оба сегмента в одном борте — т.к. ctx-menu вызывается на сегменте в этом борте)
-      const sourceBortId = window._depPickBortId;
-      if (targetBortId && sourceBortId && targetBortId !== sourceBortId){
-        alert("Зависимость возможна только в пределах одного борта");
+      const sourceOwnerId = window._depPickBortId;
+      if (targetOwnerId && sourceOwnerId && targetOwnerId !== sourceOwnerId){
+        alert("Зависимость возможна только в пределах одного борта/шаблона");
         exitDepPickMode();
         return;
       }
       // добавляем targetId к depends_on источника
-      const bort = DATA.find(b => b.id === sourceBortId);
-      const segRef = findSegById(bort, sourceId);
+      const owner = containerById(sourceOwnerId);
+      const segRef = owner && findSegById(owner, sourceId);
       if (!segRef){ exitDepPickMode(); return; }
       const deps = (segRef.depends_on || []).slice();
       if (!deps.includes(targetId)) deps.push(targetId);
-      trackEvent("context_action", `${sourceBortId}/seg/${sourceId}`, {action: "set_deps", deps, via: "drag"});
-      apiPatch(`/api/borts/${sourceBortId}/segments/${sourceId}`, {depends_on: deps}, "зависимость добавлена");
+      trackEvent("context_action", `${sourceOwnerId}/seg/${sourceId}`, {action: "set_deps", deps, via: "drag"});
+      if (isTemplateBort(sourceOwnerId)){
+        const trackRef = owner.tracks.find(t => t.segments.some(s => s.id === sourceId));
+        fetch(API_BASE + `/api/templates/${sourceOwnerId}/tracks/${trackRef.id}/segments/${sourceId}`, {
+          method: "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({depends_on: deps, session_id: SESSION_ID}),
+        })
+          .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then(() => { setStatus("зависимость добавлена"); renderAll(); })
+          .catch(err => setStatus("ошибка API: " + err.message));
+      } else {
+        apiPatch(`/api/borts/${sourceOwnerId}/segments/${sourceId}`, {depends_on: deps}, "зависимость добавлена");
+      }
       segRef.depends_on = deps;
       exitDepPickMode();
       renderAll();
@@ -1537,24 +1552,20 @@ function enterDepPickMode(bortId, sourceSegId){
   document.body.classList.add("dep-pick");
   setStatus("режим выбора цели: кликните на сегмент (или Esc для отмены)");
   // прямая линия от источника к курсору
-  const srcSeg = findSegById(DATA.find(b => b.id === bortId), sourceSegId);
-  if (!srcSeg) return;
+  const owner = containerById(bortId);
+  if (!owner || !findSegById(owner, sourceSegId)) return;
   // добавим временный svg overlay поверх всех
   const ov = document.createElement("div");
   ov.id = "dep-pick-overlay";
   ov.style.cssText = "position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:99;";
   ov.innerHTML = '<svg width="100%" height="100%"><line id="dep-pick-line" class="dep-pick-line" x1="0" y1="0" x2="0" y2="0"/></svg>';
   document.body.appendChild(ov);
-  // позиция источника
-  const srcBortIdx = DATA.findIndex(b => b.id === bortId);
-  const srcCard = document.querySelector(`.card[data-bort-idx="${srcBortIdx}"]`);
-  if (!srcCard) return;
-  const srcSegEl = Array.from(srcCard.querySelectorAll(".seg")).find(el => {
-    const bi = Number(el.dataset.bortIdx);
-    const ti = Number(el.dataset.trackIdx);
-    const si = Number(el.dataset.segIdx);
-    return DATA[bi].tracks[ti].segments[si].id === sourceSegId;
-  });
+  // позиция источника — scoped к карточке владельца
+  const ownerCard = isTemplateBort(bortId)
+    ? document.querySelector(`.card.is-template[data-tpl-id="${bortId}"]`)
+    : document.querySelector(`.card[data-bort-idx="${DATA.findIndex(b => b.id === bortId)}"]`);
+  if (!ownerCard) return;
+  const srcSegEl = Array.from(ownerCard.querySelectorAll(".seg")).find(el => el.dataset.depId == sourceSegId);
   if (!srcSegEl) return;
   const srcRect = srcSegEl.getBoundingClientRect();
   const x1 = srcRect.left + srcRect.width;

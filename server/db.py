@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS template_segments (
     days        INTEGER NOT NULL DEFAULT 0,
     dept        TEXT NOT NULL DEFAULT '',
     assignee    TEXT NOT NULL DEFAULT '',
+    depends_on  TEXT NOT NULL DEFAULT '[]',
     ord         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tpl_segs_track ON template_segments(track_id, ord);
@@ -163,10 +164,15 @@ def init_db() -> None:
                         days INTEGER NOT NULL DEFAULT 0,
                         dept TEXT NOT NULL DEFAULT '',
                         assignee TEXT NOT NULL DEFAULT '',
+                        depends_on TEXT NOT NULL DEFAULT '[]',
                         ord INTEGER NOT NULL DEFAULT 0
                     );
                 """)
                 conn.execute("DROP TABLE _tpl_old")
+        # миграция: depends_on для template_segments если старая БД
+        tscols = {r["name"] for r in conn.execute("PRAGMA table_info(template_segments)").fetchall()}
+        if "depends_on" not in tscols:
+            conn.execute("ALTER TABLE template_segments ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
         conn.commit()
 
 
