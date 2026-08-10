@@ -55,12 +55,14 @@ class MutateRequest(BaseModel):
     new_kind: str
     text: str
     today_index: int
+    session_id: str = ""
 
 
 class SubtaskRequest(BaseModel):
     """POST /api/borts/{id}/subtasks — добавить параллельную подзадачу."""
     name: str
     today_index: int
+    session_id: str = ""
 
 
 class EventRequest(BaseModel):

@@ -100,6 +100,14 @@ def _load_snapshot() -> Snapshot:
     return Snapshot(DATA=borts, QUEUE=queue)
 
 
+def _write_event(conn, session_id: str, type_: str, target: str, payload: dict) -> None:
+    import json
+    conn.execute(
+        "INSERT INTO events (session_id, type, target, payload) VALUES (?, ?, ?, ?)",
+        (session_id or "server", type_, target, json.dumps(payload, ensure_ascii=False)),
+    )
+
+
 # ---- endpoints ----
 
 @app.get("/api/health")
@@ -181,6 +189,13 @@ def mutate_bort(bort_id: str, req: MutateRequest):
             (bort_id, date_str, f"{track['name']} → {status_label_map.get(req.new_kind, req.new_kind)}",
              req.text),
         )
+        _write_event(conn, req.session_id, "mutation", bort_id, {
+            "track_id": req.track_id,
+            "track_name": track["name"],
+            "new_kind": req.new_kind,
+            "text_len": len(req.text),
+            "closed_active": active is not None,
+        })
         conn.commit()
     return {"ok": True}
 
@@ -214,6 +229,10 @@ def add_subtask(bort_id: str, req: SubtaskRequest):
             "INSERT INTO log_entries (bort_id, date, stage, text) VALUES (?, ?, ?, ?)",
             (bort_id, date_str, "Новая подзадача", f"Добавлена подзадача: {req.name}"),
         )
+        _write_event(conn, req.session_id, "subtask_add", bort_id, {
+            "track_id": track_id,
+            "name": req.name,
+        })
         conn.commit()
     return {"ok": True, "track_id": track_id}
 

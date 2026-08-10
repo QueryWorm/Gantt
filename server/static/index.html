@@ -644,8 +644,7 @@ function bindCardEvents(){
 
       bort.log.unshift({date:dateLabel(TODAY_INDEX), stage:`${track.name} → ${statusLabel[newKind]}`, text:textVal});
 
-      trackEvent("mutation", bort.id, {track: track.name, new_kind: newKind, text_len: textVal.length});
-      pushMutation(bort.id, {track_id: track.id || 0, new_kind: newKind, text: textVal, today_index: TODAY_INDEX});
+      pushMutation(bort.id, {track_id: track.id || 0, new_kind: newKind, text: textVal, today_index: TODAY_INDEX, session_id: SESSION_ID});
       renderAll();
       document.getElementById("log-"+idx).classList.add("open");
       document.getElementById("edit-"+idx).classList.add("open");
@@ -665,8 +664,7 @@ function bindCardEvents(){
         segments:[{kind:"work", label:"Работа", start:TODAY_INDEX, days:0, status:"active"}]
       });
       bort.log.unshift({date:dateLabel(TODAY_INDEX), stage:"Новая подзадача", text:`Добавлена подзадача: ${name}`});
-      trackEvent("subtask_add", bort.id, {name});
-      pushSubtask(bort.id, {name, today_index: TODAY_INDEX});
+      pushSubtask(bort.id, {name, today_index: TODAY_INDEX, session_id: SESSION_ID});
       renderAll();
       document.getElementById("edit-"+idx).classList.add("open");
       document.getElementById("log-"+idx).classList.add("open");
