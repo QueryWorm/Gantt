@@ -185,6 +185,7 @@ class TrackSegmentRequest(BaseModel):
     kind: str = "work"
     label: str
     days: int = 0
+    start: Optional[int] = None  # позиция клика (день) — вставка перед сегментом с start >= day
     today_index: int = 0
     session_id: str = ""
 

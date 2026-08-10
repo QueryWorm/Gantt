@@ -533,11 +533,31 @@ def delete_track(bort_id: str, track_id: int, session_id: str = ""):
     return {"ok": True, "segments_deleted": seg_count}
 
 
+def _insert_pos_by_day(conn, table: str, track_id: int, day: int) -> int:
+    """Позиция (ord) для вставки сегмента по дню старта: перед первым сегментом,
+    чей start >= day (иначе в конец). Ord сегментов от позиции сдвигаются вправо."""
+    rows = conn.execute(
+        f"SELECT start FROM {table} WHERE track_id = ? ORDER BY ord, id",
+        (track_id,),
+    ).fetchall()
+    pos = 0
+    for r in rows:
+        if r["start"] >= day:
+            break
+        pos += 1
+    conn.execute(
+        f"UPDATE {table} SET ord = ord + 1 WHERE track_id = ? AND ord >= ?",
+        (track_id, pos),
+    )
+    return pos
+
+
 @app.post("/api/borts/{bort_id}/tracks/{track_id}/segments")
 def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
-    """Добавить сегмент в трек борта. Старт — не раньше фактического дня:
-    max(конец последнего сегмента трека, today_index). Иначе новая задача
-    окажется в прошлом."""
+    """Добавить сегмент в трек борта. Если req.start задан (позиция клика) —
+    вставить в это место по порядку (ord по дню), иначе в конец с
+    start = max(конец последнего сегмента, today_index). Иначе новая задача
+    окажется в прошлом. Пересчёт последующих — _rebuild_planned_starts."""
     if not req.label.strip():
         raise HTTPException(400, "label is required")
     with get_conn() as conn:
@@ -547,27 +567,32 @@ def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
         ).fetchone()
         if not tr:
             raise HTTPException(404, f"track {track_id} not in bort {bort_id}")
-        last = conn.execute(
-            "SELECT start, days FROM segments WHERE track_id = ? ORDER BY ord DESC, id DESC LIMIT 1",
-            (track_id,),
-        ).fetchone()
-        if last:
-            start = max(last["start"] + max(0, last["days"]), req.today_index)
+        if req.start is not None:
+            pos = _insert_pos_by_day(conn, "segments", track_id, req.start)
+            start = req.start
         else:
-            start = req.today_index
-        max_ord = conn.execute(
-            "SELECT COALESCE(MAX(ord), -1) FROM segments WHERE track_id = ?", (track_id,),
-        ).fetchone()[0]
+            last = conn.execute(
+                "SELECT start, days FROM segments WHERE track_id = ? ORDER BY ord DESC, id DESC LIMIT 1",
+                (track_id,),
+            ).fetchone()
+            if last:
+                start = max(last["start"] + max(0, last["days"]), req.today_index)
+            else:
+                start = req.today_index
+            max_ord = conn.execute(
+                "SELECT COALESCE(MAX(ord), -1) FROM segments WHERE track_id = ?", (track_id,),
+            ).fetchone()[0]
+            pos = max_ord + 1
         cur = conn.execute(
             "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
             "VALUES (?, ?, ?, ?, ?, 'planned', ?)",
-            (track_id, req.kind, req.label, start, max(0, req.days), max_ord + 1),
+            (track_id, req.kind, req.label, start, max(0, req.days), pos),
         )
         seg_id = cur.lastrowid
         _write_event(conn, req.session_id, "segment_add", bort_id, {
-            "track_id": track_id, "seg_id": seg_id, "label": req.label, "start": start,
+            "track_id": track_id, "seg_id": seg_id, "label": req.label, "start": start, "pos": pos,
         })
-        _rebuild_planned_starts(conn, bort_id, req.today_index)
+        shifted = _rebuild_planned_starts(conn, bort_id, req.today_index)
         conn.commit()
     return {"ok": True, "seg_id": seg_id, "start": start}
 
@@ -907,13 +932,19 @@ def add_template_segment(template_id: str, track_id: int, req: TemplateSegmentRe
         ).fetchone()
         if not t:
             raise HTTPException(404, f"track {track_id} not in template {template_id}")
-        max_ord = conn.execute(
-            "SELECT COALESCE(MAX(ord), -1) FROM template_segments WHERE track_id = ?", (track_id,),
-        ).fetchone()[0]
+        if req.start >= 0:
+            pos = _insert_pos_by_day(conn, "template_segments", track_id, req.start)
+            start = req.start
+        else:
+            max_ord = conn.execute(
+                "SELECT COALESCE(MAX(ord), -1) FROM template_segments WHERE track_id = ?", (track_id,),
+            ).fetchone()[0]
+            pos = max_ord + 1
+            start = -1
         cur = conn.execute(
             "INSERT INTO template_segments (track_id, kind, label, days, dept, assignee, start, ord) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (track_id, req.kind, req.label, max(0, req.days), req.dept, req.assignee, req.start, max_ord + 1),
+            (track_id, req.kind, req.label, max(0, req.days), req.dept, req.assignee, start, pos),
         )
         seg_id = cur.lastrowid
         _write_event(conn, req.session_id, "template_segment_add", template_id, {

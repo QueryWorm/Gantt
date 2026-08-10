@@ -851,6 +851,12 @@ function bindTooltips(){
       }
       segData = isEmpty ? null : track.segments[segIdx];
       showCtxMenu(e.clientX, e.clientY, bort, track, segData, idx, trackIdx, segIdx);
+      // позиция клика в зоне → день старта для новой задачи
+      ctxCtx.clickDay = null;
+      if (isEmpty){
+        const rect = seg.getBoundingClientRect();
+        ctxCtx.clickDay = Math.max(0, Math.floor((e.clientX - rect.left) / PX_PER_DAY));
+      }
     });
   });
 }
@@ -1150,9 +1156,11 @@ async function runCtxAction(action){
     const url = isTpl
       ? API_BASE + "/api/templates/" + bortId + "/tracks/" + trackId + "/segments"
       : API_BASE + "/api/borts/" + bortId + "/tracks/" + trackId + "/segments";
+    const clickDay = ctxCtx && ctxCtx.clickDay != null ? ctxCtx.clickDay : null;
+    const posPart = clickDay != null ? {start: clickDay} : {};
     const body = isTpl
-      ? {kind: "work", label: v.trim(), days, session_id: SESSION_ID}
-      : {kind: "work", label: v.trim(), days, today_index: TODAY_INDEX, session_id: SESSION_ID};
+      ? {kind: "work", label: v.trim(), days, ...posPart, session_id: SESSION_ID}
+      : {kind: "work", label: v.trim(), days, ...posPart, today_index: TODAY_INDEX, session_id: SESSION_ID};
     fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(() => { setStatus("задача добавлена"); refetch(); })
