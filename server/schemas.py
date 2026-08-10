@@ -38,6 +38,7 @@ class Bort(BaseModel):
     tracks: list[Track] = Field(default_factory=list)
     log: list[LogEntry] = Field(default_factory=list)
     assignee: str = ""
+    dept: str = ""
     priority: int = 0
 
 
@@ -129,9 +130,10 @@ class TrackPatchRequest(BaseModel):
 
 
 class BortPatchRequest(BaseModel):
-    """PATCH /api/borts/{id} — изменить desc/assignee."""
+    """PATCH /api/borts/{id} — изменить desc/assignee/dept."""
     desc: Optional[str] = None
     assignee: Optional[str] = None
+    dept: Optional[str] = None
     session_id: str = ""
 
 
@@ -141,6 +143,7 @@ class BortCreateRequest(BaseModel):
     desc: str = ""
     priority: int = 0
     assignee: str = ""
+    dept: str = ""
     case_start: int = 0
     session_id: str = ""
 

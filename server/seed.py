@@ -26,9 +26,9 @@ def seed() -> None:
 
         for b in data["DATA"]:
             conn.execute(
-                "INSERT INTO borts (id, desc, priority, assignee, case_start) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (b["id"], b.get("desc", ""), 0, "", b.get("caseStart", 0)),
+                "INSERT INTO borts (id, desc, priority, assignee, dept, case_start) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (b["id"], b.get("desc", ""), 0, "", "", b.get("caseStart", 0)),
             )
             for t_idx, t in enumerate(b["tracks"]):
                 cur = conn.execute(

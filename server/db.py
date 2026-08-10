@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS borts (
     desc        TEXT NOT NULL DEFAULT '',
     priority    INTEGER NOT NULL DEFAULT 0,
     assignee    TEXT NOT NULL DEFAULT '',
+    dept        TEXT NOT NULL DEFAULT '',
     case_start  INTEGER NOT NULL DEFAULT 0
 );
 
@@ -97,6 +98,10 @@ def init_db() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(segments)").fetchall()}
         if "depends_on" not in cols:
             conn.execute("ALTER TABLE segments ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
+        # миграция: добавить dept в borts если старая БД
+        bcols = {r["name"] for r in conn.execute("PRAGMA table_info(borts)").fetchall()}
+        if "dept" not in bcols:
+            conn.execute("ALTER TABLE borts ADD COLUMN dept TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
 
