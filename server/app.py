@@ -137,24 +137,26 @@ def get_borts():
     return _load_snapshot()
 
 
-def _propagate_segment_starts(conn, bort_id: str, today_index: int = 0):
-    """Пересчитывает start сегментов с depends_on.
+def _rebuild_planned_starts(conn, bort_id: str, today_index: int = 0):
+    """Единый пересчёт start для всех planned-сегментов борта.
 
-    Правило: start = max(естественное место в треке, конец предшественников).
-    Естественное место — сразу после предыдущего сегмента того же трека (или
-    текущий start, если сегмент первый в треке). Сегменты без depends_on не трогает.
+    Правило: start = max(текущий start, естественное место в треке,
+    конец предшественников). Естественное место — сразу после предыдущего
+    сегмента того же трека; конец предшественников — по depends_on.
 
-    Это позволяет не только сдвигать ВПЕРЁД, когда предшественник удлинился,
-    но и возвращать назад, когда зависимость снята или предшественник укоротился."""
+    Движение ТОЛЬКО вперёд: сегменты, поставленные вручную дальше, не
+    откатываются. Правило действует для ВСЕХ planned (не только с depends_on),
+    поэтому вставка/сдвиг задачи перед существующей сдвигает последующие.
+    Каскад по треку: если зависимый сдвинулся — следующие за ним тоже."""
     segs = conn.execute(
         "SELECT s.* FROM segments s JOIN tracks t ON s.track_id = t.id "
         "WHERE t.bort_id = ? ORDER BY s.track_id, s.ord, s.id",
         (bort_id,),
     ).fetchall()
-    seg_map = {r["id"]: dict(r) for r in segs}
-    if not seg_map:
+    if not segs:
         return 0
 
+    seg_map = {r["id"]: dict(r) for r in segs}
     by_track: dict[int, list[dict]] = {}
     for r in segs:
         by_track.setdefault(r["track_id"], []).append(dict(r))
@@ -168,7 +170,7 @@ def _propagate_segment_starts(conn, bort_id: str, today_index: int = 0):
     shifted = 0
     for _round in range(100):
         any_change = False
-        for _tid, track_segs in by_track.items():
+        for track_segs in by_track.values():
             prev_end = None
             for s in track_segs:
                 if prev_end is None:
@@ -179,13 +181,13 @@ def _propagate_segment_starts(conn, bort_id: str, today_index: int = 0):
                     deps = _json.loads(s["depends_on"]) if s["depends_on"] else []
                 except (_json.JSONDecodeError, KeyError):
                     deps = []
-                if deps:
-                    max_end = 0
-                    for d in deps:
-                        pred = seg_map.get(d)
-                        if pred:
-                            max_end = max(max_end, end_of(pred))
-                    new_start = max(natural, max_end)
+                max_end = 0
+                for d in deps:
+                    pred = seg_map.get(d)
+                    if pred:
+                        max_end = max(max_end, end_of(pred))
+                if s["status"] == "planned":
+                    new_start = max(s["start"], natural, max_end)
                     if new_start != s["start"]:
                         conn.execute("UPDATE segments SET start = ? WHERE id = ?", (new_start, s["id"]))
                         s["start"] = new_start
@@ -316,7 +318,7 @@ def mutate_bort(bort_id: str, req: MutateRequest):
             "text_len": len(req.text),
             "closed_active": active is not None,
         })
-        shifted_deps = _propagate_segment_starts(conn, bort_id, req.today_index)
+        shifted_deps = _rebuild_planned_starts(conn, bort_id, req.today_index)
         if shifted_deps:
             _write_event(conn, req.session_id, "dep_propagate", bort_id, {"shifted": shifted_deps})
         conn.commit()
@@ -427,7 +429,7 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
                 conn.execute("UPDATE segments SET start = ? WHERE id = ?", (natural, seg_id))
                 changes["start"] = natural
 
-        shifted_deps = _propagate_segment_starts(conn, bort_id, req.today_index)
+        shifted_deps = _rebuild_planned_starts(conn, bort_id, req.today_index)
         changes["shifted_by_deps"] = shifted_deps
         _write_event(conn, req.session_id, "segment_patch", bort_id, changes)
         conn.commit()
@@ -565,7 +567,7 @@ def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
         _write_event(conn, req.session_id, "segment_add", bort_id, {
             "track_id": track_id, "seg_id": seg_id, "label": req.label, "start": start,
         })
-        _propagate_segment_starts(conn, bort_id, req.today_index)
+        _rebuild_planned_starts(conn, bort_id, req.today_index)
         conn.commit()
     return {"ok": True, "seg_id": seg_id, "start": start}
 
@@ -1041,7 +1043,7 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
                     (_json.dumps(mapped), new_seg_id),
                 )
         # авто-сдвиг: зависимые сегменты стартуют после конца предшественников
-        shifted_deps = _propagate_segment_starts(conn, bort_id, req.today_index)
+        shifted_deps = _rebuild_planned_starts(conn, bort_id, req.today_index)
 
         _write_event(conn, req.session_id, "template_apply", bort_id, {
             "template_id": req.template_id,
