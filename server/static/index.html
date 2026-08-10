@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>БОРТЫ · РЕМОНТ</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<style>
+  :root{
+    /* палитра из queryworm.github.io */
+    --bg: #262521;
+    --panel: #3A3833;
+    --panel-2: #524844;
+    --line: #4e473f;
+    --text: #EDE8E3;
+    --muted: #A79890;
+    --muted-2: #7A6B60;
+    --accent: #f47005;
+
+    /* статусы — из категорий фирменной гаммы */
+    --work: #489d65;   /* success */
+    --test: #5787c3;   /* info */
+    --think: #E3B341;  /* cat-kb */
+    --hold: #E15D5D;   /* cat-cyber */
+
+    --done-opacity: 0.32;
+    --label-w: 150px;
+    --px-per-day: 34px;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;}
+
+  .wrap{max-width:1040px;margin:0 auto;padding:28px 20px 80px;}
+
+  .topbar{display:flex;justify-content:space-between;align-items:flex-end;
+    border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:22px;gap:16px;flex-wrap:wrap;}
+  .eyebrow{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;
+    color:var(--muted);text-transform:uppercase;margin-bottom:6px;}
+  h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em;}
+  .clock{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);text-align:right;}
+  .topbar-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+  .file-toolbar{display:flex;gap:8px;}
+  .file-btn{background:var(--panel);border:1px solid var(--line);color:var(--text);
+    font-family:'Inter',sans-serif;font-size:11.5px;padding:6px 11px;border-radius:6px;
+    cursor:pointer;white-space:nowrap;}
+  .file-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .file-status{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted-2);}
+  #fallback-load-label{display:none;}
+  .clock b{color:var(--text);font-weight:500;}
+
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:20px;padding:12px 14px;
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;}
+  .leg-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);}
+  .leg-swatch{width:14px;height:10px;border-radius:3px;flex-shrink:0;}
+  .leg-swatch.plan{background:transparent;border:1.5px dashed var(--muted);}
+  .leg-swatch.done{opacity:var(--done-opacity);}
+  .leg-hold-parts{background:repeating-linear-gradient(135deg, var(--hold) 0 5px, #8a3a35 5px 10px);}
+  .leg-hold-people{background:repeating-linear-gradient(45deg, var(--hold) 0 5px, #8a3a35 5px 10px);}
+  .leg-hold-approve{background:repeating-linear-gradient(90deg, var(--hold) 0 4px, #8a3a35 4px 8px);}
+
+  .scroll-hint{font-size:11px;color:var(--muted-2);margin-bottom:14px;font-family:'JetBrains Mono',monospace;}
+
+  .section-label{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.12em;
+    color:var(--muted-2);text-transform:uppercase;margin:30px 0 12px;display:flex;align-items:center;gap:10px;}
+  .section-label::after{content:'';flex:1;height:1px;background:var(--line);}
+  .section-label .count{background:var(--panel-2);border:1px solid var(--line);border-radius:20px;
+    padding:1px 8px;color:var(--muted);}
+
+  /* ---- Shared sticky day ruler above all cards ---- */
+  .ruler-panel{display:flex;position:sticky;top:0;z-index:10;background:var(--bg);
+    padding-bottom:6px;margin-bottom:4px;}
+  .ruler-spacer{width:var(--label-w);flex-shrink:0;}
+  .ruler-scroll{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;}
+  .ruler-scroll::-webkit-scrollbar{display:none;}
+  .ruler-inner{height:18px;position:relative;}
+  .tick{position:absolute;top:0;bottom:0;}
+  .tick .tick-line{width:1px;height:5px;background:var(--line);}
+  .tick .tick-label{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--muted-2);
+    margin-top:1px;white-space:nowrap;}
+
+  /* ---- Bort card ---- */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:16px 18px;margin-bottom:14px;transition:border-color .15s;}
+  .card:hover{border-color:#6b6154;}
+
+  .card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
+  .bort-id{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--text);
+    letter-spacing:.02em;}
+  .bort-desc{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .day-badge{font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:6px;padding:4px 9px;white-space:nowrap;color:var(--text);}
+  .day-badge b{color:#fff;}
+  .day-badge .plan-note{color:var(--muted);font-weight:400;}
+
+  .gantt{display:flex;}
+  .gantt-labels{display:flex;flex-direction:column;flex-shrink:0;width:var(--label-w);}
+  .track-name{height:24px;display:flex;align-items:center;font-size:11px;color:var(--muted);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .track-name.main{margin-bottom:5px;}
+  .label-group{display:flex;flex-direction:column;border:1px solid transparent;box-sizing:border-box;}
+  .track-name.sub{color:var(--muted-2);font-size:10.5px;padding-left:10px;position:relative;}
+  .track-name.sub::before{content:'↳';position:absolute;left:-2px;color:var(--muted-2);}
+
+  /* the scrollable part — fixed px-per-day, so a 1-day case stays 1-day wide, never squished */
+  .gantt-chart-scroll{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;}
+  .gantt-chart-scroll::-webkit-scrollbar{height:6px;}
+  .gantt-chart-scroll::-webkit-scrollbar-thumb{background:#1a1815;border-radius:3px;}
+  .gantt-chart-inner{position:relative;}
+
+  .track-row{height:24px;position:relative;}
+  .track-row.main{
+    background: repeating-linear-gradient(to right, var(--line) 0, var(--line) 1px, #1c1a17 1px, #1c1a17 var(--px-per-day));
+    box-shadow: inset 0 0 0 1px var(--line);
+    border-radius:5px;margin-bottom:5px;}
+
+  /* параллельные подзадачи — ОДИН общий контейнер, не отдельные боксы с воздухом между ними */
+  .track-group{
+    background: repeating-linear-gradient(to right, var(--line) 0, var(--line) 1px, #1c1a17 1px, #1c1a17 var(--px-per-day));
+    box-shadow: inset 0 0 0 1px var(--line);
+    border-radius:5px;overflow:hidden;}
+  .track-group .track-row.sub{background:transparent;}
+  .track-group .track-row.sub:not(:first-child){border-top:1px solid var(--line);}
+
+  /* линия схождения: реально соединяет группу параллельных задач с точкой на главном треке,
+     а не просто оставляет их рядом друг с другом */
+  .merge-connector{position:absolute;width:0;border-left:1.5px dashed var(--muted-2);pointer-events:none;z-index:1;}
+  .merge-dot{position:absolute;width:6px;height:6px;border-radius:50%;background:var(--muted-2);
+    transform:translateX(-2.5px);pointer-events:none;z-index:2;}
+
+  .seg{position:absolute;top:2px;bottom:2px;border-radius:3px;display:flex;align-items:center;
+    justify-content:center;font-family:'JetBrains Mono',monospace;font-size:9.5px;
+    color:rgba(255,255,255,.9);white-space:nowrap;overflow:hidden;cursor:pointer;}
+
+  .seg.work{background:var(--work);}
+  .seg.test{background:var(--test);}
+  .seg.think{background:var(--think);color:#2b1e05;}
+  .seg.hold-parts{background:repeating-linear-gradient(135deg, var(--hold) 0 6px, #8a3a35 6px 12px);}
+  .seg.hold-people{background:repeating-linear-gradient(45deg, var(--hold) 0 6px, #8a3a35 6px 12px);}
+  .seg.hold-approve{background:repeating-linear-gradient(90deg, var(--hold) 0 4px, #8a3a35 4px 8px);}
+
+  .seg.st-done{opacity:var(--done-opacity);}
+  .seg.st-active{opacity:1;box-shadow:0 0 0 1px rgba(255,255,255,.15);}
+  .seg.st-active::after{content:'';position:absolute;right:0;top:0;bottom:0;width:3px;background:#fff;
+    opacity:.55;animation:pulse 1.6s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.15;}50%{opacity:.85;}}
+  .seg.st-planned{background:transparent!important;border:1.5px dashed var(--muted);color:var(--muted);opacity:1;}
+
+  /* только что стартовавший сегмент (0 дней) — честная точка, а не выдуманный день */
+  .seg-stub{position:absolute;top:7px;width:10px;height:10px;border-radius:50%;
+    transform:translateX(-5px);cursor:pointer;z-index:1;}
+  .seg-stub.work{background:var(--work);}
+  .seg-stub.test{background:var(--test);}
+  .seg-stub.think{background:var(--think);}
+  .seg-stub.hold-parts, .seg-stub.hold-people, .seg-stub.hold-approve{background:var(--hold);}
+  .seg-stub.st-active{box-shadow:0 0 0 4px rgba(237,232,227,.14);animation:stubpulse 1.6s ease-in-out infinite;}
+  @keyframes stubpulse{0%,100%{box-shadow:0 0 0 3px rgba(237,232,227,.10);}50%{box-shadow:0 0 0 6px rgba(237,232,227,.20);}}
+
+  .today-line{position:absolute;top:0;bottom:0;width:1.5px;background:var(--accent);opacity:.85;z-index:2;}
+  .today-tag{position:absolute;top:-16px;transform:translateX(-50%);font-family:'JetBrains Mono',monospace;
+    font-size:9px;color:var(--text);background:var(--panel-2);border:1px solid var(--line);
+    border-radius:3px;padding:0 4px;white-space:nowrap;}
+
+  .stats-row{display:flex;justify-content:space-between;align-items:center;margin-top:12px;
+    font-size:11.5px;color:var(--muted);flex-wrap:wrap;gap:8px;}
+  .stats-row .num{color:var(--text);font-family:'JetBrains Mono',monospace;}
+  .toggles{display:flex;gap:12px;}
+
+  .log-toggle, .edit-toggle{background:none;border:none;color:var(--muted);font-size:11px;cursor:pointer;
+    font-family:'Inter',sans-serif;padding:0;text-decoration:underline;text-decoration-color:var(--line);
+    text-underline-offset:3px;}
+  .log-toggle:hover, .edit-toggle:hover{color:var(--text);}
+
+  .edit-form{max-height:0;overflow:hidden;transition:max-height .25s ease, margin-top .25s ease;margin-top:0;}
+  .edit-form.open{max-height:420px;margin-top:12px;}
+  .edit-inner{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px;}
+  .edit-row{display:flex;gap:8px;}
+  .edit-row select{flex:1;}
+  .edit-row select, .edit-row textarea, .subtask-row input{background:var(--panel-2);border:1px solid var(--line);
+    color:var(--text);border-radius:6px;padding:6px 8px;font-family:'Inter',sans-serif;font-size:12px;width:100%;}
+  .edit-inner textarea{resize:vertical;min-height:44px;font-family:'Inter',sans-serif;}
+  .edit-save{align-self:flex-end;background:var(--work);color:#0c1f14;border:none;
+    font-weight:700;font-size:12px;padding:7px 14px;border-radius:6px;cursor:pointer;}
+  .edit-save:hover{filter:brightness(1.08);}
+
+  .subtask-block{border-top:1px dashed var(--line);padding-top:10px;margin-top:2px;}
+  .subtask-label{font-size:10.5px;color:var(--muted-2);text-transform:uppercase;
+    letter-spacing:.06em;margin-bottom:6px;font-family:'JetBrains Mono',monospace;}
+  .subtask-row{display:flex;gap:8px;}
+  .subtask-row input{flex:1;}
+  .subtask-add{background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;}
+  .subtask-add:hover{border-color:var(--accent);color:var(--accent);}
+
+  .log{max-height:0;overflow:hidden;transition:max-height .25s ease, margin-top .25s ease;margin-top:0;}
+  .log.open{max-height:400px;margin-top:12px;}
+  .log-entry{border-top:1px solid var(--line);padding:9px 0;font-size:12px;}
+  .log-entry:first-child{border-top:none;}
+  .log-meta{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted-2);
+    display:flex;gap:8px;margin-bottom:3px;}
+  .log-meta .stage{color:var(--muted);}
+  .log-text{color:var(--text);}
+
+  .tooltip{position:fixed;background:#211f1b;border:1px solid #1a1815;border-radius:7px;
+    padding:9px 11px;font-size:11.5px;max-width:240px;z-index:50;pointer-events:none;
+    box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity .1s;}
+  .tooltip.show{opacity:1;}
+
+  .queue-item{display:flex;justify-content:space-between;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:10px 14px;margin-bottom:8px;font-size:12.5px;}
+  .queue-item .qid{font-family:'JetBrains Mono',monospace;color:var(--muted);}
+  .queue-item .qreason{color:var(--muted-2);font-size:11.5px;}
+
+  @media (max-width:640px){
+    :root{--label-w:96px;}
+    .track-name{font-size:10px;}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="topbar">
+    <div>
+      <div class="eyebrow">Парк · Ремонт бортов</div>
+      <h1>Активные ремонты</h1>
+    </div>
+    <div class="topbar-right">
+      <div class="file-toolbar">
+        <button class="file-btn" id="connect-btn">📁 Подключить файл</button>
+        <label class="file-btn" for="load-input" id="fallback-load-label" title="Резервный вариант, если браузер не поддерживает автосвязь">📂 Загрузить вручную</label>
+        <input type="file" id="load-input" accept="application/json" hidden>
+      </div>
+      <div class="file-status" id="file-status">данные только в этой вкладке — не сохраняются</div>
+      <div class="clock">Обновлено <b>сегодня</b><br>09.08.2026</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="leg-item"><span class="leg-swatch" style="background:var(--work)"></span>В работе (сейчас)</div>
+    <div class="leg-item"><span class="leg-swatch done" style="background:var(--work)"></span>Готово (в прошлом)</div>
+    <div class="leg-item"><span class="leg-swatch" style="background:var(--test)"></span>Тесты</div>
+    <div class="leg-item"><span class="leg-swatch" style="background:var(--think)"></span>Разбор задачи</div>
+    <div class="leg-item"><span class="leg-swatch plan"></span>Запланировано</div>
+    <div class="leg-item"><span class="leg-swatch leg-hold-parts"></span>Холд · нет запчастей</div>
+    <div class="leg-item"><span class="leg-swatch leg-hold-people"></span>Холд · нет человека</div>
+    <div class="leg-item"><span class="leg-swatch leg-hold-approve"></span>Холд · нет решения</div>
+  </div>
+
+  <div class="scroll-hint">Масштаб фиксированный (px/день) — короткий ремонт не сжимается. Скролл общий: листаешь один таймлайн — едут все.</div>
+
+  <div class="ruler-panel">
+    <div class="ruler-spacer"></div>
+    <div class="ruler-scroll" id="ruler-scroll">
+      <div class="ruler-inner" id="ruler-inner"></div>
+    </div>
+  </div>
+
+  <div class="section-label">Активны сейчас <span class="count">3</span></div>
+  <div id="active-list"></div>
+
+  <div class="section-label">В очереди <span class="count">2</span></div>
+  <div id="queue-list"></div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+/*
+  Модель на борт (КАЛЕНДАРНАЯ, не относительная):
+  - EPOCH — общая точка отсчёта (день 0) для ВСЕХ бортов.
+  - start/days у каждого сегмента — абсолютный день от EPOCH, а не "день от начала
+    конкретно этого кейса". Раньше у каждого борта был свой ноль, из-за чего "сегодня"
+    оказывалось в разных местах на разных карточках — это и было причиной, что ФПВ-01
+    "не совпадал": он совпадал сам с собой, но не с остальными.
+  - caseStart — абсолютный день, когда СТАРТОВАЛ именно этот кейс (для бейджа "Д+N").
+  - todayIndex — один общий для всех, вычисляется из TODAY_DATE.
+*/
+
+const EPOCH_DATE = new Date(2026, 6, 19);  // 19.07.2026 — день 0
+const TODAY_DATE  = new Date(2026, 7, 9);  // 09.08.2026 — "сегодня"
+const TODAY_INDEX = Math.round((TODAY_DATE - EPOCH_DATE) / 86400000);
+
+const API_BASE = "http://127.0.0.1:8765";
+const SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) ||
+  "sess-" + Math.random().toString(36).slice(2) + "-" + Date.now();
+
+function trackEvent(type, target, payload){
+  fetch(API_BASE + "/api/events", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({session_id: SESSION_ID, type, target, payload: payload || {}}),
+    keepalive: true,
+  }).catch(()=>{});  // события — fire and forget
+}
+
+function dateLabel(dayIndex){
+  const d = new Date(EPOCH_DATE);
+  d.setDate(d.getDate() + dayIndex);
+  return String(d.getDate()).padStart(2,"0") + "." + String(d.getMonth()+1).padStart(2,"0");
+}
+
+const DATA = [
+  {
+    id: "FPV-03",
+    desc: "интеграция Hikvision PTZ — кронштейн + сборка",
+    caseStart: 0, // 19.07
+    tracks: [
+      { name: "Прошивка электроники", segments: [
+        {kind:"think", label:"Разбор", start:0, days:1, status:"done"},
+        {kind:"work",  label:"Прошивка", start:1, days:3, status:"done"},
+        {kind:"hold-people", label:"Холд", start:6, days:15, status:"active"},
+        {kind:"test",  label:"Тест (план)", start:21, days:2, status:"planned"},
+      ]},
+      { name: "Разработка кронштейна", sub:true, segments: [
+        {kind:"work", label:"Разработка", start:1, days:3, status:"done"},
+      ]},
+      { name: "Сварка кронштейна", sub:true, segments: [
+        {kind:"work", label:"Сварка", start:4, days:2, status:"done"},
+      ]},
+    ],
+    log: [
+      {date:"09.08", stage:"Холд", text:"Кронштейн сварен и прошивка готова ещё с 25.07 — сборщик всё это время занят на других бортах. Простой уже две недели."},
+      {date:"25.07", stage:"Сварка → Холд", text:"Сварка кронштейна закончена (началась только после готовых чертежей 23.07), сошлись на сборке — и тут же встали."},
+      {date:"23.07", stage:"Разработка → Сварка", text:"Чертежи кронштейна утверждены и прошивка готова в один день, сварка стартовала следом — параллельно с разработкой была невозможна."},
+      {date:"20.07", stage:"Разбор → Работа", text:"Начали прошивку электроники и разработку кронштейна параллельно."},
+    ]
+  },
+  {
+    id: "FPV-05",
+    desc: "нестабильное видео, подозрение на Majestic",
+    caseStart: 15, // 03.08
+    tracks: [
+      { name: "Работа над видео", segments: [
+        {kind:"work", label:"Замена антенны", start:15, days:2, status:"done"},
+        {kind:"test", label:"Тест №1", start:17, days:1, status:"done"},
+        {kind:"work", label:"Доработка", start:18, days:2, status:"done"},
+        {kind:"test", label:"Тест №2", start:20, days:1, status:"active"},
+        {kind:"work", label:"Возврат в строй (план)", start:21, days:1, status:"planned"},
+      ]},
+    ],
+    log: [
+      {date:"09.08", stage:"Тест №2", text:"Второй облёт, видео пока стабильно — ждём подтверждения на дистанции."},
+      {date:"06.08", stage:"Доработка", text:"Тест №1 показал зависания на 300м+, откатили прошивку Majestic на пред. версию."},
+      {date:"05.08", stage:"Тест №1", text:"Первый тест после замены антенны."},
+    ]
+  },
+  {
+    id: "FPV-01",
+    desc: "нет телеметрии, протокол не MAVLink — разбираемся",
+    caseStart: 20, // 08.08 — начали только вчера
+    tracks: [
+      { name: "Диагностика телеметрии", segments: [
+        {kind:"think", label:"Разбор", start:20, days:1, status:"active"},
+      ]},
+    ],
+    log: [
+      {date:"09.08", stage:"Разбор", text:"Только начали — сняли дамп UART, протокол не MAVLink, похоже на проприетарный."},
+    ]
+  },
+];
+
+const QUEUE = [
+  {id:"FPV-02", reason:"Ждёт очереди — приоритет ниже FPV-03"},
+  {id:"FPV-04", reason:"Ждёт решения: чинить или списать раму"},
+];
+
+const holdReasonLabel = {parts:"нет запчастей", people:"нет человека", approve:"нет решения"};
+const statusLabel = {
+  work:"В работе", test:"Тест", think:"Разбор задачи",
+  "hold-parts":"Холд · нет запчастей", "hold-people":"Холд · нет человека", "hold-approve":"Холд · нет решения"
+};
+
+const PX_PER_DAY = 34;
+
+function axisTotalFor(bort){
+  let max = TODAY_INDEX;
+  bort.tracks.forEach(t => t.segments.forEach(s => { max = Math.max(max, s.start + s.days); }));
+  return max + 2; // немного запаса справа, чтобы today-риска не липла к краю
+}
+
+function tickStep(axisTotal){
+  if(axisTotal <= 14) return 1;
+  if(axisTotal <= 30) return 2;
+  return 5;
+}
+
+function buildRuler(minStart, axisTotal){
+  const step = tickStep(axisTotal - minStart);
+  const width = axisTotal * PX_PER_DAY;
+  let ticks = "";
+  for(let d = minStart; d <= axisTotal; d += step){
+    const left = d * PX_PER_DAY;
+    ticks += `<div class="tick" style="left:${left}px">
+                <div class="tick-line"></div>
+                <div class="tick-label">${dateLabel(d)}</div>
+              </div>`;
+  }
+  document.getElementById("ruler-inner").style.width = width + "px";
+  document.getElementById("ruler-inner").innerHTML = ticks;
+}
+
+function renderTrackRow(track, roleClass){
+  const segHtml = track.segments.map(seg=>{
+    const left = seg.start * PX_PER_DAY;
+    const width = seg.days * PX_PER_DAY;
+    const kindClass = seg.kind;
+    const statusClass = "st-" + seg.status;
+    const tip = seg.status === "planned"
+      ? `${seg.label} · план ${seg.days}д`
+      : (seg.kind.startsWith("hold")
+          ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]}`
+          : `${seg.label} · ${seg.days}д`);
+    if(seg.days === 0){
+      return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня"></div>`;
+    }
+    const text = width > 50 ? seg.label : "";
+    return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip}">${text}</div>`;
+  }).join("");
+  return `<div class="track-row ${roleClass}">${segHtml}</div>`;
+}
+
+const segKindLabel = {work:"Работа", test:"Тест", think:"Разбор",
+  "hold-parts":"Холд", "hold-people":"Холд", "hold-approve":"Холд"};
+
+function computeStats(bort){
+  let work=0, testCycles=0, hold=0, holdReason=null;
+  bort.tracks[0].segments.forEach(seg=>{
+    if(seg.status === "planned") return;
+    const dur = seg.status === "active" ? Math.max(0, TODAY_INDEX - seg.start) : seg.days;
+    if(seg.kind === "work") work += dur;
+    else if(seg.kind === "test") testCycles += 1;
+    else if(seg.kind.startsWith("hold")){
+      hold += dur;
+      if(seg.status === "active") holdReason = holdReasonLabel[seg.kind.split("-")[1]];
+    }
+  });
+  return {work, testCycles, hold, holdReason};
+}
+
+function renderCard(bort, idx, sharedAxisTotal){
+  const chartWidth = sharedAxisTotal * PX_PER_DAY;
+  const todayLeft = TODAY_INDEX * PX_PER_DAY; // общий для всех — реальный календарный "сегодня"
+  const ownFinish = axisTotalFor(bort) - 2;
+
+  const [mainTrack, ...subTracks] = bort.tracks;
+
+  const labelsHtml = `<div class="track-name main">${mainTrack.name}</div>` +
+    (subTracks.length
+      ? `<div class="label-group">${subTracks.map(t=>`<div class="track-name sub">${t.name}</div>`).join("")}</div>`
+      : "");
+
+  const rowsHtml = renderTrackRow(mainTrack, "main") +
+    (subTracks.length
+      ? `<div class="track-group">${subTracks.map(t=>renderTrackRow(t,"sub")).join("")}</div>`
+      : "");
+
+  let connectorHtml = "";
+  if(subTracks.length){
+    const convergeDay = Math.max(...subTracks.flatMap(t => t.segments.map(s => s.start + s.days)));
+    const cx = convergeDay * PX_PER_DAY;
+    const mainH = 24, gap = 5, groupH = subTracks.length * 24;
+    connectorHtml = `<div class="merge-connector" style="left:${cx}px;top:${mainH}px;height:${gap+groupH}px"></div>
+                      <div class="merge-dot" style="left:${cx}px;top:${mainH-3}px"></div>`;
+  }
+
+  const stats = computeStats(bort);
+  const statsHtml = `
+    <span>Работа: <span class="num">${stats.work}д</span></span>
+    <span>Тест-циклов: <span class="num">${stats.testCycles}</span></span>
+    <span>Холд: <span class="num">${stats.hold}д</span>${stats.holdReason ? ' · '+stats.holdReason : ''}</span>
+  `;
+
+  const logHtml = bort.log.map(l=>`
+    <div class="log-entry">
+      <div class="log-meta"><span>${l.date}</span><span class="stage">${l.stage}</span></div>
+      <div class="log-text">${l.text}</div>
+    </div>
+  `).join("");
+
+  const trackOptions = bort.tracks.map((t,i)=>
+    `<option value="${i}">${t.name}${i===0?' (главный)':''}</option>`
+  ).join("");
+
+  return `
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="bort-id">${bort.id}</div>
+        <div class="bort-desc">${bort.desc}</div>
+      </div>
+      <div class="day-badge">Д+<b>${TODAY_INDEX - bort.caseStart}</b> <span class="plan-note">/ план до ${dateLabel(ownFinish)}</span></div>
+    </div>
+    <div class="gantt">
+      <div class="gantt-labels">${labelsHtml}</div>
+      <div class="gantt-chart-scroll" id="chart-scroll-${idx}">
+        <div class="gantt-chart-inner" style="width:${chartWidth}px">
+          ${rowsHtml}
+          ${connectorHtml}
+          <div class="today-line" style="left:${todayLeft}px">
+            <div class="today-tag">сегодня ${dateLabel(TODAY_INDEX)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stats-row">
+      <div>${statsHtml}</div>
+      <div class="toggles">
+        <button class="edit-toggle" data-idx="${idx}">✎ править</button>
+        <button class="log-toggle" data-idx="${idx}">лог ремонта →</button>
+      </div>
+    </div>
+    <div class="edit-form" id="edit-${idx}">
+      <div class="edit-inner">
+        <div class="edit-row">
+          <select id="edit-track-${idx}">${trackOptions}</select>
+          <select id="edit-status-${idx}">
+            <option value="work">В работе</option>
+            <option value="test">Тест</option>
+            <option value="think">Разбор задачи</option>
+            <option value="hold-parts">Холд · нет запчастей</option>
+            <option value="hold-people">Холд · нет человека</option>
+            <option value="hold-approve">Холд · нет решения</option>
+          </select>
+        </div>
+        <textarea id="edit-text-${idx}" placeholder="Что произошло? Например: поставщик обещал деталь к среде"></textarea>
+        <button class="edit-save" data-idx="${idx}">Сменить статус</button>
+
+        <div class="subtask-block">
+          <div class="subtask-label">+ новая параллельная подзадача</div>
+          <div class="subtask-row">
+            <input id="edit-subtask-${idx}" type="text" placeholder="Например: Обвязка ONVIF">
+            <button class="subtask-add" data-idx="${idx}">Добавить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="log" id="log-${idx}">${logHtml}</div>
+  </div>`;
+}
+
+function renderQueue(item){
+  return `<div class="queue-item">
+    <span class="qid">${item.id}</span>
+    <span class="qreason">${item.reason}</span>
+  </div>`;
+}
+
+function renderAll(){
+  const sharedAxisTotal = Math.max(...DATA.map(axisTotalFor));
+  buildRuler(0, sharedAxisTotal);
+  document.getElementById("active-list").innerHTML = DATA.map((b,i)=>renderCard(b,i,sharedAxisTotal)).join("");
+  document.getElementById("queue-list").innerHTML = QUEUE.map(renderQueue).join("");
+  bindCardEvents();
+  bindSyncedScroll();
+}
+
+const tooltip = document.getElementById("tooltip");
+function bindTooltips(){
+  document.querySelectorAll(".seg").forEach(seg=>{
+    const tip = seg.dataset.tip;
+    seg.addEventListener("mousemove", e=>{
+      tooltip.textContent = tip;
+      tooltip.style.left = (e.clientX + 14) + "px";
+      tooltip.style.top = (e.clientY + 14) + "px";
+      tooltip.classList.add("show");
+    });
+    seg.addEventListener("mouseleave", ()=> tooltip.classList.remove("show"));
+    seg.addEventListener("click", ()=>{
+      trackEvent("click_segment", tip, {left: seg.style.left, width: seg.style.width});
+    });
+  });
+}
+
+// все таймлайны (общая линейка + каждая карточка) скроллятся синхронно
+function bindSyncedScroll(){
+  const scrollers = [document.getElementById("ruler-scroll"),
+    ...document.querySelectorAll(".gantt-chart-scroll")];
+  let syncing = false;
+  let scrollDebounce = null;
+  scrollers.forEach(el=>{
+    el.addEventListener("scroll", ()=>{
+      if(syncing) return;
+      syncing = true;
+      scrollers.forEach(other=>{ if(other !== el) other.scrollLeft = el.scrollLeft; });
+      syncing = false;
+      // дебаунс — событие на scroll раз в 500мс
+      clearTimeout(scrollDebounce);
+      scrollDebounce = setTimeout(()=>{
+        trackEvent("scroll_timeline", "", {scrollLeft: el.scrollLeft});
+      }, 500);
+    });
+  });
+}
+
+function bindCardEvents(){
+  document.querySelectorAll(".log-toggle").forEach(btn=>{
+    btn.onclick = ()=>{
+      const log = document.getElementById("log-"+btn.dataset.idx);
+      const open = log.classList.toggle("open");
+      btn.textContent = open ? "лог ремонта ↓" : "лог ремонта →";
+      trackEvent("toggle_log", DATA[btn.dataset.idx].id, {open});
+    };
+  });
+  document.querySelectorAll(".edit-toggle").forEach(btn=>{
+    btn.onclick = ()=>{
+      const panel = document.getElementById("edit-"+btn.dataset.idx);
+      const open = panel.classList.toggle("open");
+      trackEvent("toggle_edit", DATA[btn.dataset.idx].id, {open});
+    };
+  });
+
+  // смена статуса: закрывает текущий активный сегмент выбранной дорожки на сегодня
+  // и открывает новый — реальная мутация таймлайна, а не просто строка в логе
+  document.querySelectorAll(".edit-save").forEach(btn=>{
+    btn.onclick = ()=>{
+      const idx = btn.dataset.idx;
+      const bort = DATA[idx];
+      const trackIdx = Number(document.getElementById("edit-track-"+idx).value);
+      const newKind = document.getElementById("edit-status-"+idx).value;
+      const textVal = document.getElementById("edit-text-"+idx).value.trim();
+      if(!textVal) return;
+
+      const track = bort.tracks[trackIdx];
+      const segs = track.segments;
+      const activeI = segs.findIndex(s => s.status === "active");
+
+      if(activeI !== -1){
+        const active = segs[activeI];
+        const elapsed = TODAY_INDEX - active.start;
+        if(elapsed > 0){
+          active.days = elapsed;
+          active.status = "done";
+        } else {
+          segs.splice(activeI, 1); // начали и тут же передумали в тот же день — не плодим 0-дневный "готово"
+        }
+      }
+      // убираем устаревшие план-сегменты, которые план предполагал раньше сегодняшнего дня
+      track.segments = track.segments.filter(s => !(s.status === "planned" && s.start <= TODAY_INDEX));
+      track.segments.push({kind:newKind, label:segKindLabel[newKind], start:TODAY_INDEX, days:0, status:"active"});
+
+      bort.log.unshift({date:dateLabel(TODAY_INDEX), stage:`${track.name} → ${statusLabel[newKind]}`, text:textVal});
+
+      trackEvent("mutation", bort.id, {track: track.name, new_kind: newKind, text_len: textVal.length});
+      pushMutation(bort.id, {track_id: track.id || 0, new_kind: newKind, text: textVal, today_index: TODAY_INDEX});
+      renderAll();
+      document.getElementById("log-"+idx).classList.add("open");
+      document.getElementById("edit-"+idx).classList.add("open");
+    };
+  });
+
+  // новая параллельная подзадача — стартует сегодня, точкой, пока не дадите ей длительность правкой статуса
+  document.querySelectorAll(".subtask-add").forEach(btn=>{
+    btn.onclick = ()=>{
+      const idx = btn.dataset.idx;
+      const bort = DATA[idx];
+      const input = document.getElementById("edit-subtask-"+idx);
+      const name = input.value.trim();
+      if(!name) return;
+      bort.tracks.push({
+        name, sub:true,
+        segments:[{kind:"work", label:"Работа", start:TODAY_INDEX, days:0, status:"active"}]
+      });
+      bort.log.unshift({date:dateLabel(TODAY_INDEX), stage:"Новая подзадача", text:`Добавлена подзадача: ${name}`});
+      trackEvent("subtask_add", bort.id, {name});
+      pushSubtask(bort.id, {name, today_index: TODAY_INDEX});
+      renderAll();
+      document.getElementById("edit-"+idx).classList.add("open");
+      document.getElementById("log-"+idx).classList.add("open");
+    };
+  });
+
+  bindTooltips();
+}
+
+/*
+  Связь с API (FastAPI + SQLite). fetch — fire-and-forget при мутациях,
+  чтобы UI не ждал ответа. При ошибке — сообщение в status-bar.
+*/
+
+function pushMutation(bortId, body, okMsg){
+  fetch(API_BASE + "/api/borts/" + bortId + "/mutate", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  })
+    .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(() => setStatus(okMsg || "сохранено в БД · " + dateLabel(TODAY_INDEX)))
+    .catch(err => setStatus("ошибка API: " + err.message));
+}
+
+function pushSubtask(bortId, body){
+  fetch(API_BASE + "/api/borts/" + bortId + "/subtasks", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  })
+    .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(() => setStatus("подзадача добавлена · " + dateLabel(TODAY_INDEX)))
+    .catch(err => setStatus("ошибка API: " + err.message));
+}
+
+async function loadFromAPI(){
+  try{
+    const r = await fetch(API_BASE + "/api/borts");
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const parsed = await r.json();
+    if(parsed.DATA){
+      DATA.length = 0; DATA.push(...parsed.DATA);
+      QUEUE.length = 0; QUEUE.push(...(parsed.QUEUE || []));
+      setStatus("загружено из API · сессия " + SESSION_ID.slice(0,8));
+      return true;
+    }
+  }catch(err){
+    setStatus("API недоступно: " + err.message + " — fallback на JSON");
+  }
+  return false;
+}
+
+/*
+  Автосвязь с файлом на диске (File System Access API — Chrome/Edge).
+  Один раз "подключаешь" файл, дальше при каждой правке он сам перезаписывается,
+  а при следующем открытии страницы — сам читается, без диалогов.
+  Firefox/Safari эту API не поддерживают — для них оставлена ручная кнопка "Загрузить вручную".
+*/
+const FS_SUPPORTED = "showSaveFilePicker" in window;
+let fileHandle = null;
+const fileStatusEl = document.getElementById("file-status");
+const connectBtn = document.getElementById("connect-btn");
+const fallbackLabel = document.getElementById("fallback-load-label");
+
+function setStatus(text){ fileStatusEl.textContent = text; }
+
+function idbOpen(){
+  return new Promise((res, rej)=>{
+    const req = indexedDB.open("fleet-repair-fs", 1);
+    req.onupgradeneeded = ()=> req.result.createObjectStore("handles");
+    req.onsuccess = ()=> res(req.result);
+    req.onerror = ()=> rej(req.error);
+  });
+}
+async function idbGet(key){
+  const db = await idbOpen();
+  return new Promise((res, rej)=>{
+    const rq = db.transaction("handles","readonly").objectStore("handles").get(key);
+    rq.onsuccess = ()=> res(rq.result);
+    rq.onerror = ()=> rej(rq.error);
+  });
+}
+async function idbSet(key, val){
+  const db = await idbOpen();
+  return new Promise((res, rej)=>{
+    const tx = db.transaction("handles","readwrite");
+    tx.objectStore("handles").put(val, key);
+    tx.oncomplete = ()=> res();
+    tx.onerror = ()=> rej(tx.error);
+  });
+}
+
+async function writeToHandle(){
+  if(!fileHandle) return;
+  try{
+    let perm = await fileHandle.queryPermission({mode:"readwrite"});
+    if(perm !== "granted") perm = await fileHandle.requestPermission({mode:"readwrite"});
+    if(perm !== "granted"){ setStatus("нет доступа на запись — нажми «Подключить файл» заново"); return; }
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify({DATA, QUEUE}, null, 2));
+    await writable.close();
+    setStatus(`синхронизировано · ${fileHandle.name} · ${dateLabel(TODAY_INDEX)}`);
+  }catch(err){
+    console.error(err);
+    setStatus("ошибка записи в файл: " + err.message);
+  }
+}
+
+async function chooseFile(){
+  try{
+    fileHandle = await window.showSaveFilePicker({
+      suggestedName: "fleet-repair-data.json",
+      types: [{description:"JSON", accept:{"application/json":[".json"]}}]
+    });
+    await idbSet("handle", fileHandle);
+    connectBtn.textContent = "📁 " + fileHandle.name;
+    await writeToHandle();
+  }catch(err){
+    if(err.name !== "AbortError") console.error(err);
+  }
+}
+
+async function tryAutoLoad(){
+  if(!FS_SUPPORTED) { setStatus("браузер не поддерживает автосвязь — используй «Загрузить вручную»"); return; }
+  try{
+    const handle = await idbGet("handle");
+    if(!handle) { setStatus("файл не подключён — нажми «Подключить файл» один раз"); return; }
+    const perm = await handle.queryPermission({mode:"readwrite"});
+    if(perm !== "granted"){ setStatus("доступ к файлу нужно подтвердить — нажми «Подключить файл»"); return; }
+    fileHandle = handle;
+    connectBtn.textContent = "📁 " + handle.name;
+    const file = await handle.getFile();
+    const text = await file.text();
+    if(text.trim()){
+      const parsed = JSON.parse(text);
+      if(parsed.DATA){
+        DATA.length = 0; DATA.push(...parsed.DATA);
+        QUEUE.length = 0; QUEUE.push(...(parsed.QUEUE || []));
+      }
+    }
+    setStatus(`автозагружено из ${handle.name}`);
+  }catch(err){
+    console.error(err);
+    setStatus("не удалось автозагрузить — нажми «Подключить файл»");
+  }
+}
+
+function loadFromFileManual(file){
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const parsed = JSON.parse(e.target.result);
+      if(!parsed.DATA || !Array.isArray(parsed.DATA)) throw new Error("нет поля DATA");
+      DATA.length = 0; DATA.push(...parsed.DATA);
+      QUEUE.length = 0; QUEUE.push(...(parsed.QUEUE || []));
+      renderAll();
+      setStatus("загружено вручную (без автосинхронизации)");
+    }catch(err){
+      alert("Не удалось прочитать файл: " + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+connectBtn.addEventListener("click", chooseFile);
+if(!FS_SUPPORTED) fallbackLabel.style.display = "inline-block";
+document.getElementById("load-input").addEventListener("change", e=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  if(confirm("Загрузка файла заменит текущие данные на экране. Продолжить?")) loadFromFileManual(file);
+  e.target.value = "";
+});
+
+(async function init(){
+  trackEvent("session_start", "", {session_id: SESSION_ID});
+  const ok = await loadFromAPI();
+  if(!ok) await tryAutoLoad();
+  renderAll();
+})();
+</script>
+
+</body>
+</html>
