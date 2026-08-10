@@ -91,6 +91,17 @@
   .card:hover .card-close{opacity:1;}
   .card-close:hover{color:#E15D5D;background:#3a2827;}
 
+  .card.is-template{border:1.5px dashed var(--accent);background:rgba(244,112,5,.04);}
+  .card.is-template .bort-id::before{content:'📋 шаблон · ';color:var(--accent);font-size:11px;font-weight:400;}
+  .card.is-template .seg{cursor:default !important;}
+
+  .card-apply{position:absolute;top:8px;right:36px;background:transparent;border:none;
+    color:var(--accent);font-size:11px;cursor:pointer;padding:2px 8px;border-radius:4px;
+    font-family:'Inter',sans-serif;line-height:1;opacity:0;transition:opacity .15s;
+    border:1px solid var(--accent);}
+  .card:hover .card-apply{opacity:1;}
+  .card-apply:hover{background:var(--accent);color:var(--bg);}
+
   .card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
   .bort-id{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--text);
     letter-spacing:.02em;line-height:1.4;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;}
@@ -362,6 +373,12 @@
 
   <div class="section-label">В очереди <span class="count">2</span></div>
   <div id="queue-list"></div>
+
+  <div class="section-label">
+    Шаблоны <span class="count" id="templates-count">0</span>
+    <button class="file-btn" id="new-template-inline" style="margin-left:auto;padding:3px 10px;font-size:11px">+ новый шаблон</button>
+  </div>
+  <div id="templates-list"></div>
 </div>
 
 <div class="tooltip" id="tooltip"></div>
@@ -721,13 +738,138 @@ function renderQueue(item){
   </div>`;
 }
 
-function renderAll(){
+async function renderAll(){
   const sharedAxisTotal = Math.max(...DATA.map(axisTotalFor));
   buildRuler(0, sharedAxisTotal);
   document.getElementById("active-list").innerHTML = DATA.map((b,i)=>renderCard(b,i,sharedAxisTotal)).join("");
   document.getElementById("queue-list").innerHTML = QUEUE.map(renderQueue).join("");
+  // загрузить шаблоны и отрендерить
+  await renderTemplatesSection();
   bindCardEvents();
   bindSyncedScroll();
+}
+
+let TEMPLATES = [];
+async function renderTemplatesSection(){
+  try {
+    const r = await fetch(API_BASE + "/api/templates");
+    if (!r.ok) return;
+    const list = await r.json();
+    TEMPLATES = list;
+    document.getElementById("templates-count").textContent = list.length;
+    if (list.length === 0){
+      document.getElementById("templates-list").innerHTML = `<div class="empty-hint" style="padding:14px">нет шаблонов. Создайте через ${""}📋 Шаблоны</div>`;
+      return;
+    }
+    // загрузить полные шаблоны
+    const full = await Promise.all(list.map(t =>
+      fetch(API_BASE + "/api/templates/" + t.id).then(r => r.ok ? r.json() : null).catch(() => null)
+    ));
+    const valid = full.filter(Boolean);
+    // max день среди всех шаблонов
+    const maxDays = Math.max(1, ...valid.flatMap(t => t.tracks.flatMap(tr => tr.segments.map(s => s.start + s.days))));
+    const PX = PX_PER_DAY;
+    const chartWidth = maxDays * PX + 40;
+    document.getElementById("templates-list").innerHTML = valid.map((tpl, ti) => renderTemplateCard(tpl, ti, chartWidth)).join("");
+  } catch(e){
+    // молча
+  }
+}
+
+function renderTemplateCard(tpl, idx, chartWidth){
+  const [mainTrack, ...subTracks] = tpl.tracks;
+  const ROW_H = 24, GAP = 5, MAIN_H = 24;
+  const rowY = (trackIdx) => trackIdx === 0 ? 0 : MAIN_H + GAP + (trackIdx - 1) * ROW_H;
+  const totalRows = tpl.tracks.length;
+  const svgHeight = totalRows === 1 ? MAIN_H : MAIN_H + GAP + (totalRows - 1) * ROW_H;
+
+  const labelsHtml = `<div class="track-name main">${escapeHtml(mainTrack ? mainTrack.name : "—")}</div>` +
+    (subTracks.length
+      ? `<div class="label-group">${subTracks.map(t => `<div class="track-name sub">${escapeHtml(t.name)}</div>`).join("")}</div>`
+      : "");
+
+  // пробежаться по трекам и сгенерить rowHtml
+  let rowsHtml = "";
+  tpl.tracks.forEach((t, ti) => {
+    const segHtml = t.segments.map((s, si) => {
+      const left = (s.start + 0) * PX_PER_DAY;
+      const width = Math.max(2, s.days * PX_PER_DAY);
+      const kindClass = s.kind;
+      const statusClass = "st-" + s.status;
+      const leftDays = (s.start + 0);
+      const tip = `${s.label} · ${s.days}д · ${dateLabel(s.start)} · ${s.dept || "—"} · ${s.assignee || "—"}`;
+      const text = width > 50 ? s.label : "";
+      return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip.replace(/"/g, '&quot;')}">${text}</div>`;
+    }).join("");
+    const roleClass = ti === 0 ? "main" : "sub";
+    rowsHtml += ti === 0
+      ? `<div class="track-row ${roleClass}">${segHtml}</div>`
+      : (ti === 1 ? `<div class="track-group">${renderTemplateTrackSub(tpl.tracks.slice(1), idx)}</div>` : "");
+  });
+
+  // для sub-trackов делаем одну обёртку
+  function renderTemplateTrackSub(subs, tIdx){
+    return subs.map((t, ti) => {
+      const segHtml = t.segments.map((s, si) => {
+        const left = (s.start + 0) * PX_PER_DAY;
+        const width = Math.max(2, s.days * PX_PER_DAY);
+        const kindClass = s.kind;
+        const statusClass = "st-" + s.status;
+        const tip = `${s.label} · ${s.days}д · ${dateLabel(s.start)} · ${s.dept || "—"} · ${s.assignee || "—"}`;
+        const text = width > 50 ? s.label : "";
+        return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip.replace(/"/g, '&quot;')}">${text}</div>`;
+      }).join("");
+      return `<div class="track-row sub">${segHtml}</div>`;
+    }).join("");
+  }
+
+  // сегменты в правильном порядке: main row, потом group с sub
+  let rows = "";
+  if (mainTrack){
+    rows += renderTemplateTrackRow(mainTrack, 0);
+  }
+  if (subTracks.length){
+    rows += `<div class="track-group">${subTracks.map((t, ti) => renderTemplateTrackRow(t, ti + 1)).join("")}</div>`;
+  }
+
+  const totalSegs = tpl.tracks.reduce((a, t) => a + t.segments.length, 0);
+
+  return `
+  <div class="card is-template" data-tpl-id="${escapeHtml(tpl.id)}">
+    <button class="card-apply" data-tpl-id="${escapeHtml(tpl.id)}" title="Применить шаблон к борту">▶ применить</button>
+    <button class="card-close" data-tpl-id="${escapeHtml(tpl.id)}" title="Удалить шаблон">✕</button>
+    <div class="card-head">
+      <div>
+        <div class="bort-id">
+          <span>${escapeHtml(tpl.name)}</span>
+          <span class="tpl-meta">${escapeHtml(tpl.id)} · ${tpl.tracks.length} дорожек · ${totalSegs} сегментов</span>
+        </div>
+      </div>
+      <div class="day-badge">шаблон</div>
+    </div>
+    <div class="gantt">
+      <div class="gantt-labels">${labelsHtml}</div>
+      <div class="gantt-chart-scroll">
+        <div class="gantt-chart-inner" style="width:${chartWidth}px;height:${svgHeight}px">
+          ${rows}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderTemplateTrackRow(t, trackIdx){
+  const segHtml = t.segments.map(s => {
+    const left = (s.start + 0) * PX_PER_DAY;
+    const width = Math.max(2, s.days * PX_PER_DAY);
+    const kindClass = s.kind;
+    const statusClass = "st-" + s.status;
+    const tip = `${s.label} · ${s.days}д · ${dateLabel(s.start)} · ${s.dept || "—"} · ${s.assignee || "—"}`;
+    const text = width > 50 ? s.label : "";
+    return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip.replace(/"/g, '&quot;')}">${text}</div>`;
+  }).join("");
+  const roleClass = trackIdx === 0 ? "main" : "sub";
+  return `<div class="track-row ${roleClass}">${segHtml}</div>`;
 }
 
 const tooltip = document.getElementById("tooltip");
@@ -1098,6 +1240,14 @@ function bindCardEvents(){
   document.querySelectorAll(".card-close").forEach(btn=>{
     btn.onclick = (e) => {
       e.stopPropagation();
+      if (btn.dataset.tplId){
+        // удаление шаблона
+        if (!confirm(`Удалить шаблон ${btn.dataset.tplId}?`)) return;
+        trackEvent("context_action", btn.dataset.tplId, {action: "del_template"});
+        fetch(API_BASE + "/api/templates/" + btn.dataset.tplId, {method: "DELETE"})
+          .then(() => { renderAll(); setStatus("шаблон удалён"); });
+        return;
+      }
       const idx = Number(btn.dataset.idx);
       const bort = DATA[idx];
       if (!confirm(`Удалить ремонт ${bort.id} и все его треки?`)) return;
@@ -1105,6 +1255,12 @@ function bindCardEvents(){
       apiDelete(`/api/borts/${bort.id}`, "борт удалён");
       DATA.splice(idx, 1);
       renderAll();
+    };
+  });
+  document.querySelectorAll(".card-apply").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      applyTemplateToBort(btn.dataset.tplId);
     };
   });
   document.querySelectorAll(".log-toggle").forEach(btn=>{
@@ -1812,6 +1968,56 @@ async function applyTemplatePrompt(tplId){
     alert("ошибка: " + err.message);
   }
 }
+
+async function applyTemplateToBort(tplId){
+  const list = DATA.map(b => `${b.id} — ${b.desc}`).join("\n");
+  const choice = prompt(`Применить шаблон ${tplId} к какому борту?\nВведите ID борта:\n` + list);
+  if (!choice) return;
+  const bortId = choice.trim().toUpperCase();
+  if (!DATA.some(b => b.id === bortId)){ alert("борт не найден"); return; }
+  try {
+    const r = await fetch(API_BASE + "/api/borts/" + bortId + "/apply_template", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        template_id: tplId,
+        today_index: TODAY_INDEX,
+        session_id: SESSION_ID,
+      }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    setStatus("применено: +" + d.tracks_added + " дорожек, +" + d.segments_added + " сегментов");
+    trackEvent("template_apply", bortId, {template_id: tplId, tracks: d.tracks_added, segments: d.segments_added});
+    refetch();
+  } catch(err){
+    alert("ошибка: " + err.message);
+  }
+}
+
+document.getElementById("new-template-inline").addEventListener("click", () => {
+  const id = prompt("ID шаблона (например fpv-ptz):");
+  if (!id || !id.trim()) return;
+  const name = prompt("Название:");
+  if (!name || !name.trim()) return;
+  fetch(API_BASE + "/api/templates", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      id: id.trim(),
+      name: name.trim(),
+      tracks: [{name: "Главный", sub: false, segments: [{kind: "think", label: "Разбор", days: 1, dept: "", assignee: ""}]}],
+      session_id: SESSION_ID,
+    }),
+  })
+    .then(r => {
+      if (r.status === 409) throw new Error("уже существует");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(() => { renderAll(); setStatus("шаблон создан"); })
+    .catch(err => alert("ошибка: " + err.message));
+});
 
 function escapeHtml(s){
   return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
