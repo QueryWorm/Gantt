@@ -189,6 +189,10 @@
   .edit-save{align-self:flex-end;background:var(--work);color:#0c1f14;border:none;
     font-weight:700;font-size:12px;padding:7px 14px;border-radius:6px;cursor:pointer;}
   .edit-save:hover{filter:brightness(1.08);}
+  .edit-buttons{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
+  .edit-log{background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    font-size:12px;padding:7px 14px;border-radius:6px;cursor:pointer;font-family:'Inter',sans-serif;}
+  .edit-log:hover{border-color:var(--accent);color:var(--accent);}
 
   .subtask-block{border-top:1px dashed var(--line);padding-top:10px;margin-top:2px;}
   .subtask-label{font-size:10.5px;color:var(--muted-2);text-transform:uppercase;
@@ -564,7 +568,10 @@ function renderCard(bort, idx, sharedAxisTotal){
           </select>
         </div>
         <textarea id="edit-text-${idx}" placeholder="Что произошло? Например: поставщик обещал деталь к среде"></textarea>
-        <button class="edit-save" data-idx="${idx}">Сменить статус</button>
+        <div class="edit-buttons">
+          <button class="edit-log" data-idx="${idx}">📝 Записать в лог</button>
+          <button class="edit-save" data-idx="${idx}">Сменить статус</button>
+        </div>
 
         <div class="subtask-block">
           <div class="subtask-label">+ новая параллельная подзадача</div>
@@ -915,6 +922,32 @@ function bindCardEvents(){
       const panel = document.getElementById("edit-"+btn.dataset.idx);
       const open = panel.classList.toggle("open");
       trackEvent("toggle_edit", DATA[btn.dataset.idx].id, {open});
+    };
+  });
+
+  // запись в лог без смены статуса — для ежедневных заметок
+  document.querySelectorAll(".edit-log").forEach(btn=>{
+    btn.onclick = ()=>{
+      const idx = btn.dataset.idx;
+      const bort = DATA[idx];
+      const trackIdx = document.getElementById("edit-track-"+idx).value;
+      const textVal = document.getElementById("edit-text-"+idx).value.trim();
+      if(!textVal){ alert("Введите текст записи"); return; }
+      const trackId = trackIdx ? bort.tracks[Number(trackIdx)].id : null;
+      trackEvent("log_entry_intent", bort.id, {track_id: trackId, text_len: textVal.length});
+      fetch(API_BASE + "/api/borts/" + bort.id + "/log", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          text: textVal,
+          track_id: trackId,
+          today_index: TODAY_INDEX,
+          session_id: SESSION_ID,
+        }),
+      })
+        .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(d => { setStatus("записано в лог · " + d.date); refetch(); document.getElementById("edit-text-"+idx).value = ""; })
+        .catch(err => setStatus("ошибка: " + err.message));
     };
   });
 

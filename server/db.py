@@ -34,14 +34,15 @@ CREATE TABLE IF NOT EXISTS tracks (
 CREATE INDEX IF NOT EXISTS idx_tracks_bort ON tracks(bort_id, ord);
 
 CREATE TABLE IF NOT EXISTS segments (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-    kind      TEXT NOT NULL,
-    label     TEXT NOT NULL,
-    start     INTEGER NOT NULL,
-    days      INTEGER NOT NULL,
-    status    TEXT NOT NULL,
-    ord       INTEGER NOT NULL DEFAULT 0
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    start       INTEGER NOT NULL,
+    days        INTEGER NOT NULL,
+    status      TEXT NOT NULL,
+    ord         INTEGER NOT NULL DEFAULT 0,
+    depends_on  TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_segments_track ON segments(track_id, ord);
 
@@ -85,6 +86,10 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        # миграция: добавить depends_on если старая БД
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(segments)").fetchall()}
+        if "depends_on" not in cols:
+            conn.execute("ALTER TABLE segments ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
         conn.commit()
 
 

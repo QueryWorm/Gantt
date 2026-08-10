@@ -5,3 +5,5 @@
 {"id":"int-6e408067","kind":"field_change","created_at":"2026-08-10T17:16:47.703378939Z","actor":"QueryWorm","issue_id":"Gantt-dmn","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-7074b81f","kind":"field_change","created_at":"2026-08-10T17:58:29.433835346Z","actor":"QueryWorm","issue_id":"Gantt-bls","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-97694994","kind":"field_change","created_at":"2026-08-10T18:47:07.794290244Z","actor":"QueryWorm","issue_id":"Gantt-0b7","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-8e4decf4","kind":"field_change","created_at":"2026-08-10T18:56:18.937046788Z","actor":"QueryWorm","issue_id":"Gantt-xc1","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-2404e54e","kind":"field_change","created_at":"2026-08-10T19:06:34.389510683Z","actor":"QueryWorm","issue_id":"Gantt-pxo","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}

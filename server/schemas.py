@@ -65,6 +65,15 @@ class SubtaskRequest(BaseModel):
     session_id: str = ""
 
 
+class LogEntryRequest(BaseModel):
+    """POST /api/borts/{id}/log — запись в лог без смены статуса."""
+    text: str
+    stage: str = ""
+    track_id: Optional[int] = None
+    today_index: int = 0
+    session_id: str = ""
+
+
 class EventRequest(BaseModel):
     """POST /api/events — трекинг действия тестера."""
     session_id: str
@@ -74,11 +83,12 @@ class EventRequest(BaseModel):
 
 
 class SegmentPatchRequest(BaseModel):
-    """PATCH /api/borts/{id}/segments/{sid} — изменить kind/status/days/start."""
+    """PATCH /api/borts/{id}/segments/{sid} — изменить kind/status/days/start/depends_on."""
     kind: Optional[str] = None
     status: Optional[str] = None
     days: Optional[int] = None
     start: Optional[int] = None
+    depends_on: Optional[list[int]] = None
     session_id: str = ""
 
 

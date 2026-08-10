@@ -3,6 +3,7 @@
 
 Запуск: ../venv/bin/uvicorn server.app:app --host 127.0.0.1 --port 8765
 """
+import json as _json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +16,7 @@ from .schemas import (
     Snapshot, Bort, Track, Segment, LogEntry, QueueItem,
     MutateRequest, SubtaskRequest, EventRequest, EventStats,
     SegmentPatchRequest, TrackPatchRequest, BortPatchRequest,
-    BortCreateRequest,
+    BortCreateRequest, LogEntryRequest,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -41,6 +42,11 @@ app.add_middleware(
 # ---- helpers ----
 
 def _row_to_segment(r) -> dict:
+    import json
+    try:
+        depends_on = json.loads(r["depends_on"]) if r["depends_on"] else []
+    except (json.JSONDecodeError, KeyError):
+        depends_on = []
     return {
         "id": r["id"],
         "kind": r["kind"],
@@ -49,6 +55,7 @@ def _row_to_segment(r) -> dict:
         "days": r["days"],
         "status": r["status"],
         "ord": r["ord"],
+        "depends_on": depends_on,
     }
 
 
@@ -177,7 +184,7 @@ def mutate_bort(bort_id: str, req: MutateRequest):
 
         # лог
         from datetime import datetime, timedelta, timezone
-        EPOCH = datetime(2026, 6, 19)
+        EPOCH = datetime(2026, 7, 19)
         d = EPOCH + timedelta(days=req.today_index)
         date_str = f"{d.day:02d}.{d.month:02d}"
         status_label_map = {
@@ -224,7 +231,7 @@ def add_subtask(bort_id: str, req: SubtaskRequest):
             (track_id, req.today_index),
         )
         from datetime import datetime, timedelta
-        EPOCH = datetime(2026, 6, 19)
+        EPOCH = datetime(2026, 7, 19)
         d = EPOCH + timedelta(days=req.today_index)
         date_str = f"{d.day:02d}.{d.month:02d}"
         conn.execute(
@@ -283,6 +290,9 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
         if req.start is not None:
             updates.append("start = ?"); params.append(req.start)
             changes["start"] = req.start
+        if req.depends_on is not None:
+            updates.append("depends_on = ?"); params.append(_json.dumps(req.depends_on))
+            changes["depends_on"] = req.depends_on
 
         if not updates:
             raise HTTPException(400, "nothing to update")
@@ -400,6 +410,39 @@ def create_bort(req: BortCreateRequest):
         })
         conn.commit()
     return {"ok": True, "id": bort_id}
+
+
+@app.post("/api/borts/{bort_id}/log")
+def add_log_entry(bort_id: str, req: LogEntryRequest):
+    """Запись в лог без смены статуса. Каждый день можно оставлять записи."""
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    from datetime import datetime, timedelta
+    epoch = datetime(2026, 7, 19)
+    d = epoch + timedelta(days=req.today_index)
+    date_str = f"{d.day:02d}.{d.month:02d}"
+
+    with get_conn() as conn:
+        if not conn.execute("SELECT 1 FROM borts WHERE id = ?", (bort_id,)).fetchone():
+            raise HTTPException(404, f"bort {bort_id} not found")
+        stage = req.stage.strip()
+        if not stage and req.track_id:
+            tr = conn.execute("SELECT name FROM tracks WHERE id = ?", (req.track_id,)).fetchone()
+            if tr:
+                stage = f"Лог · {tr['name']}"
+        if not stage:
+            stage = "Лог"
+        conn.execute(
+            "INSERT INTO log_entries (bort_id, date, stage, text) VALUES (?, ?, ?, ?)",
+            (bort_id, date_str, stage, text),
+        )
+        _write_event(conn, req.session_id, "log_entry", bort_id, {
+            "stage": stage, "date": date_str, "text_len": len(text),
+            "track_id": req.track_id,
+        })
+        conn.commit()
+    return {"ok": True, "date": date_str, "stage": stage}
 
 
 @app.post("/api/events")
