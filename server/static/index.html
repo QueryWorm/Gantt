@@ -83,8 +83,13 @@
 
   /* ---- Bort card ---- */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-    padding:16px 18px;margin-bottom:14px;transition:border-color .15s;}
+    padding:16px 18px;margin-bottom:14px;transition:border-color .15s;position:relative;}
   .card:hover{border-color:#6b6154;}
+  .card-close{position:absolute;top:8px;right:10px;background:transparent;border:none;
+    color:var(--muted);font-size:14px;cursor:pointer;padding:2px 8px;border-radius:4px;
+    line-height:1;opacity:0;transition:opacity .15s,color .15s,background .15s;}
+  .card:hover .card-close{opacity:1;}
+  .card-close:hover{color:#E15D5D;background:#3a2827;}
 
   .card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
   .bort-id{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--text);
@@ -250,6 +255,7 @@
         <button class="file-btn" id="connect-btn">📁 Подключить файл</button>
         <label class="file-btn" for="load-input" id="fallback-load-label" title="Резервный вариант, если браузер не поддерживает автосвязь">📂 Загрузить вручную</label>
         <input type="file" id="load-input" accept="application/json" hidden>
+        <button class="file-btn" id="new-bort-btn" title="Создать новый ремонт (борт)">+ ремонт</button>
       </div>
       <div class="file-status" id="file-status">данные только в этой вкладке — не сохраняются</div>
       <div class="clock">Обновлено <b>сегодня</b><br>09.08.2026</div>
@@ -318,6 +324,18 @@ function dateLabel(dayIndex){
   const d = new Date(EPOCH_DATE);
   d.setDate(d.getDate() + dayIndex);
   return String(d.getDate()).padStart(2,"0") + "." + String(d.getMonth()+1).padStart(2,"0");
+}
+
+function parseDate(str){
+  // принимает "10.08" или "10.08.2026" → индекс от EPOCH.
+  // null если не DD.MM.
+  const m = String(str).trim().match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?$/);
+  if (!m) return null;
+  const day = +m[1], mon = +m[2] - 1;
+  const year = m[3] ? (+m[3] < 100 ? 2000 + +m[3] : +m[3]) : EPOCH_DATE.getFullYear();
+  const d = new Date(year, mon, day);
+  if (d.getDate() !== day || d.getMonth() !== mon) return null;  // 31.02 и т.п.
+  return Math.round((d - EPOCH_DATE) / 86400000);
 }
 
 const DATA = [
@@ -427,10 +445,10 @@ function renderTrackRow(track, roleClass, bortIdx, trackIdx){
     const kindClass = seg.kind;
     const statusClass = "st-" + seg.status;
     const tip = seg.status === "planned"
-      ? `${seg.label} · план ${seg.days}д`
+      ? `${seg.label} · план ${seg.days}д · ${dateLabel(seg.start)}`
       : (seg.kind.startsWith("hold")
-          ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]}`
-          : `${seg.label} · ${seg.days}д`);
+          ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]} · ${dateLabel(seg.start)}`
+          : `${seg.label} · ${seg.days}д · ${dateLabel(seg.start)}`);
     const idxAttrs = `data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-seg-idx="${segIdx}"`;
     if(seg.days === 0){
       return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня" ${idxAttrs}></div>`;
@@ -504,7 +522,8 @@ function renderCard(bort, idx, sharedAxisTotal){
   ).join("");
 
   return `
-  <div class="card">
+  <div class="card" data-bort-idx="${idx}">
+    <button class="card-close" data-idx="${idx}" title="Удалить ремонт (правый клик на сегмент → Борт → Удалить)">✕</button>
     <div class="card-head">
       <div>
         <div class="bort-id">${bort.id}</div>
@@ -654,7 +673,7 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
     <div class="ctx-sep"></div>
 
     <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="set_start"><span>Стартовый день: <span class="ctx-hint">${seg.start}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="set_start"><span>Старт: <span class="ctx-hint">${dateLabel(seg.start)}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
     <div class="ctx-sep"></div>
 
@@ -728,10 +747,16 @@ async function runCtxAction(action){
     return;
   }
   if (action === "set_start"){
-    const v = prompt("Стартовый день (от 0):", String(seg.start));
+    const v = prompt("Стартовый день (число от 0 или дата DD.MM):", dateLabel(seg.start));
     if (v === null) return;
-    const n = Number(v);
-    if (!Number.isFinite(n) || n < 0){ alert("Должно быть числом ≥ 0"); return; }
+    let n;
+    if (/^\d+(\.\d+)?$/.test(v.trim())){
+      n = Number(v);
+    } else {
+      n = parseDate(v);
+      if (n === null){ alert("Не понял: «" + v + "». Введите число или DD.MM (например 10.08)"); return; }
+    }
+    if (!Number.isFinite(n) || n < 0){ alert("Должно быть ≥ 0"); return; }
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_start", start: n});
     apiPatch(`/api/borts/${bortId}/segments/${segId}`, {start: n}, "старт обновлён");
     seg.start = n; renderAll();
@@ -836,6 +861,18 @@ function bindSyncedScroll(){
 }
 
 function bindCardEvents(){
+  document.querySelectorAll(".card-close").forEach(btn=>{
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const idx = Number(btn.dataset.idx);
+      const bort = DATA[idx];
+      if (!confirm(`Удалить ремонт ${bort.id} и все его треки?`)) return;
+      trackEvent("context_action", bort.id, {action: "del_bort"});
+      apiDelete(`/api/borts/${bort.id}`, "борт удалён");
+      DATA.splice(idx, 1);
+      renderAll();
+    };
+  });
   document.querySelectorAll(".log-toggle").forEach(btn=>{
     btn.onclick = ()=>{
       const log = document.getElementById("log-"+btn.dataset.idx);
@@ -1077,6 +1114,45 @@ document.getElementById("load-input").addEventListener("change", e=>{
   if(confirm("Загрузка файла заменит текущие данные на экране. Продолжить?")) loadFromFileManual(file);
   e.target.value = "";
 });
+
+document.getElementById("new-bort-btn").addEventListener("click", createNewBort);
+
+function createNewBort(){
+  const id = prompt("Идентификатор ремонта (например FPV-06):");
+  if (!id || !id.trim()) return;
+  const cleanId = id.trim().toUpperCase();
+  if (DATA.some(b => b.id === cleanId)){ alert("Борт " + cleanId + " уже существует"); return; }
+  const desc = prompt("Описание (опционально):", "") || "";
+  trackEvent("bort_create_intent", cleanId, {desc});
+  fetch(API_BASE + "/api/borts", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      id: cleanId,
+      desc: desc,
+      case_start: TODAY_INDEX,
+      session_id: SESSION_ID,
+    }),
+  })
+    .then(r => {
+      if (r.status === 409) throw new Error("уже существует");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(() => {
+      // добавляем в локальный DATA с одним пустым main-треком (нужен для рендера)
+      DATA.push({
+        id: cleanId,
+        desc: desc,
+        caseStart: TODAY_INDEX,
+        tracks: [{name: "Работа", sub: false, segments: []}],
+        log: [],
+      });
+      renderAll();
+      setStatus("ремонт " + cleanId + " создан · " + dateLabel(TODAY_INDEX));
+    })
+    .catch(err => setStatus("ошибка создания: " + err.message));
+}
 
 (async function init(){
   trackEvent("session_start", "", {session_id: SESSION_ID});

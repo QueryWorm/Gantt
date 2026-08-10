@@ -15,6 +15,7 @@ from .schemas import (
     Snapshot, Bort, Track, Segment, LogEntry, QueueItem,
     MutateRequest, SubtaskRequest, EventRequest, EventStats,
     SegmentPatchRequest, TrackPatchRequest, BortPatchRequest,
+    BortCreateRequest,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -379,6 +380,26 @@ def delete_bort(bort_id: str, session_id: str = ""):
         })
         conn.commit()
     return {"ok": True, "tracks_deleted": track_count}
+
+
+@app.post("/api/borts")
+def create_bort(req: BortCreateRequest):
+    bort_id = req.id.strip()
+    if not bort_id:
+        raise HTTPException(400, "id is required")
+    with get_conn() as conn:
+        if conn.execute("SELECT 1 FROM borts WHERE id = ?", (bort_id,)).fetchone():
+            raise HTTPException(409, f"bort {bort_id} already exists")
+        conn.execute(
+            "INSERT INTO borts (id, desc, priority, assignee, case_start) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (bort_id, req.desc, req.priority, req.assignee, req.case_start),
+        )
+        _write_event(conn, req.session_id, "bort_create", bort_id, {
+            "desc": req.desc, "case_start": req.case_start,
+        })
+        conn.commit()
+    return {"ok": True, "id": bort_id}
 
 
 @app.post("/api/events")

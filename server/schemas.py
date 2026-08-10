@@ -94,6 +94,16 @@ class BortPatchRequest(BaseModel):
     session_id: str = ""
 
 
+class BortCreateRequest(BaseModel):
+    """POST /api/borts — создать ремонт."""
+    id: str = ""
+    desc: str = ""
+    priority: int = 0
+    assignee: str = ""
+    case_start: int = 0
+    session_id: str = ""
+
+
 class EventStats(BaseModel):
     total: int
     by_type: dict[str, int]
