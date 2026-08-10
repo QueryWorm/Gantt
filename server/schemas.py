@@ -73,6 +73,27 @@ class EventRequest(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class SegmentPatchRequest(BaseModel):
+    """PATCH /api/borts/{id}/segments/{sid} — изменить kind/status/days/start."""
+    kind: Optional[str] = None
+    status: Optional[str] = None
+    days: Optional[int] = None
+    start: Optional[int] = None
+    session_id: str = ""
+
+
+class TrackPatchRequest(BaseModel):
+    """PATCH /api/borts/{id}/tracks/{tid} — переименовать."""
+    name: str
+    session_id: str = ""
+
+
+class BortPatchRequest(BaseModel):
+    """PATCH /api/borts/{id} — изменить desc."""
+    desc: str
+    session_id: str = ""
+
+
 class EventStats(BaseModel):
     total: int
     by_type: dict[str, int]

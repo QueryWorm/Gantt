@@ -14,6 +14,7 @@ from .db import init_db, get_conn
 from .schemas import (
     Snapshot, Bort, Track, Segment, LogEntry, QueueItem,
     MutateRequest, SubtaskRequest, EventRequest, EventStats,
+    SegmentPatchRequest, TrackPatchRequest, BortPatchRequest,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -235,6 +236,149 @@ def add_subtask(bort_id: str, req: SubtaskRequest):
         })
         conn.commit()
     return {"ok": True, "track_id": track_id}
+
+
+# ---- PATCH / DELETE для контекстного меню ----
+
+_VALID_KINDS = {"work", "test", "think", "hold-parts", "hold-people", "hold-approve"}
+_VALID_STATUSES = {"active", "done", "planned"}
+_KIND_LABELS = {
+    "work": "Работа", "test": "Тест", "think": "Разбор",
+    "hold-parts": "Холд", "hold-people": "Холд", "hold-approve": "Холд",
+}
+
+
+@app.patch("/api/borts/{bort_id}/segments/{seg_id}")
+def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
+    with get_conn() as conn:
+        seg = conn.execute(
+            "SELECT s.* FROM segments s JOIN tracks t ON s.track_id = t.id "
+            "WHERE s.id = ? AND t.bort_id = ?",
+            (seg_id, bort_id),
+        ).fetchone()
+        if not seg:
+            raise HTTPException(404, f"segment {seg_id} not in bort {bort_id}")
+
+        updates: list[str] = []
+        params: list = []
+        changes: dict = {"seg_id": seg_id}
+
+        if req.kind is not None:
+            if req.kind not in _VALID_KINDS:
+                raise HTTPException(400, f"invalid kind: {req.kind}")
+            updates.append("kind = ?"); params.append(req.kind)
+            updates.append("label = ?"); params.append(_KIND_LABELS.get(req.kind, req.kind))
+            changes["kind"] = req.kind
+        if req.status is not None:
+            if req.status not in _VALID_STATUSES:
+                raise HTTPException(400, f"invalid status: {req.status}")
+            updates.append("status = ?"); params.append(req.status)
+            changes["status"] = req.status
+        if req.days is not None:
+            if req.days < 0:
+                raise HTTPException(400, "days must be >= 0")
+            updates.append("days = ?"); params.append(req.days)
+            changes["days"] = req.days
+        if req.start is not None:
+            updates.append("start = ?"); params.append(req.start)
+            changes["start"] = req.start
+
+        if not updates:
+            raise HTTPException(400, "nothing to update")
+
+        params.append(seg_id)
+        conn.execute(f"UPDATE segments SET {', '.join(updates)} WHERE id = ?", params)
+        _write_event(conn, req.session_id, "segment_patch", bort_id, changes)
+        conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/borts/{bort_id}/segments/{seg_id}")
+def delete_segment(bort_id: str, seg_id: int, session_id: str = ""):
+    with get_conn() as conn:
+        seg = conn.execute(
+            "SELECT s.* FROM segments s JOIN tracks t ON s.track_id = t.id "
+            "WHERE s.id = ? AND t.bort_id = ?",
+            (seg_id, bort_id),
+        ).fetchone()
+        if not seg:
+            raise HTTPException(404, f"segment {seg_id} not in bort {bort_id}")
+        conn.execute("DELETE FROM segments WHERE id = ?", (seg_id,))
+        _write_event(conn, session_id, "segment_delete", bort_id, {
+            "seg_id": seg_id, "kind": seg["kind"], "status": seg["status"],
+        })
+        conn.commit()
+    return {"ok": True}
+
+
+@app.patch("/api/borts/{bort_id}/tracks/{track_id}")
+def patch_track(bort_id: str, track_id: int, req: TrackPatchRequest):
+    if not req.name.strip():
+        raise HTTPException(400, "name is required")
+    with get_conn() as conn:
+        tr = conn.execute(
+            "SELECT * FROM tracks WHERE id = ? AND bort_id = ?",
+            (track_id, bort_id),
+        ).fetchone()
+        if not tr:
+            raise HTTPException(404, f"track {track_id} not in bort {bort_id}")
+        conn.execute("UPDATE tracks SET name = ? WHERE id = ?", (req.name, track_id))
+        _write_event(conn, req.session_id, "track_patch", bort_id, {
+            "track_id": track_id, "old_name": tr["name"], "new_name": req.name,
+        })
+        conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/borts/{bort_id}/tracks/{track_id}")
+def delete_track(bort_id: str, track_id: int, session_id: str = ""):
+    with get_conn() as conn:
+        tr = conn.execute(
+            "SELECT * FROM tracks WHERE id = ? AND bort_id = ?",
+            (track_id, bort_id),
+        ).fetchone()
+        if not tr:
+            raise HTTPException(404, f"track {track_id} not in bort {bort_id}")
+        seg_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM segments WHERE track_id = ?", (track_id,),
+        ).fetchone()["c"]
+        conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+        _write_event(conn, session_id, "track_delete", bort_id, {
+            "track_id": track_id, "name": tr["name"], "segments_deleted": seg_count,
+        })
+        conn.commit()
+    return {"ok": True, "segments_deleted": seg_count}
+
+
+@app.patch("/api/borts/{bort_id}")
+def patch_bort(bort_id: str, req: BortPatchRequest):
+    with get_conn() as conn:
+        b = conn.execute("SELECT * FROM borts WHERE id = ?", (bort_id,)).fetchone()
+        if not b:
+            raise HTTPException(404, f"bort {bort_id} not found")
+        conn.execute("UPDATE borts SET desc = ? WHERE id = ?", (req.desc, bort_id))
+        _write_event(conn, req.session_id, "bort_patch", bort_id, {
+            "old_desc": b["desc"], "new_desc": req.desc,
+        })
+        conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/borts/{bort_id}")
+def delete_bort(bort_id: str, session_id: str = ""):
+    with get_conn() as conn:
+        b = conn.execute("SELECT * FROM borts WHERE id = ?", (bort_id,)).fetchone()
+        if not b:
+            raise HTTPException(404, f"bort {bort_id} not found")
+        track_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM tracks WHERE bort_id = ?", (bort_id,),
+        ).fetchone()["c"]
+        conn.execute("DELETE FROM borts WHERE id = ?", (bort_id,))
+        _write_event(conn, session_id, "bort_delete", bort_id, {
+            "desc": b["desc"], "tracks_deleted": track_count,
+        })
+        conn.commit()
+    return {"ok": True, "tracks_deleted": track_count}
 
 
 @app.post("/api/events")

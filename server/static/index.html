@@ -208,6 +208,23 @@
     box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity .1s;}
   .tooltip.show{opacity:1;}
 
+  /* ---- Context menu (правый клик) ---- */
+  .ctx-menu{position:fixed;background:#211f1b;border:1px solid #4e473f;
+    border-radius:6px;padding:4px 0;z-index:100;min-width:240px;
+    font-size:12px;color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.55);
+    display:none;max-width:340px;}
+  .ctx-menu.show{display:block;}
+  .ctx-item{padding:6px 14px;cursor:pointer;display:flex;justify-content:space-between;
+    align-items:center;gap:14px;line-height:1.4;}
+  .ctx-item:hover:not(.disabled){background:var(--panel-2);}
+  .ctx-item.disabled{opacity:.35;cursor:default;}
+  .ctx-item.danger{color:#E15D5D;}
+  .ctx-item.danger:hover{background:#3a2827;}
+  .ctx-hint{color:var(--muted-2);font-size:11px;font-family:'JetBrains Mono',monospace;}
+  .ctx-sep{border-top:1px solid var(--line);margin:4px 0;}
+  .ctx-label{font-size:10px;color:var(--muted-2);text-transform:uppercase;
+    letter-spacing:.08em;padding:6px 14px 4px;font-family:'JetBrains Mono',monospace;}
+
   .queue-item{display:flex;justify-content:space-between;align-items:center;
     background:var(--panel);border:1px solid var(--line);border-radius:8px;
     padding:10px 14px;margin-bottom:8px;font-size:12.5px;}
@@ -403,8 +420,8 @@ function buildRuler(minStart, axisTotal){
   document.getElementById("ruler-inner").innerHTML = ticks;
 }
 
-function renderTrackRow(track, roleClass){
-  const segHtml = track.segments.map(seg=>{
+function renderTrackRow(track, roleClass, bortIdx, trackIdx){
+  const segHtml = track.segments.map((seg, segIdx) => {
     const left = seg.start * PX_PER_DAY;
     const width = seg.days * PX_PER_DAY;
     const kindClass = seg.kind;
@@ -414,11 +431,12 @@ function renderTrackRow(track, roleClass){
       : (seg.kind.startsWith("hold")
           ? `${seg.label} · ${holdReasonLabel[seg.kind.split("-")[1]]}`
           : `${seg.label} · ${seg.days}д`);
+    const idxAttrs = `data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-seg-idx="${segIdx}"`;
     if(seg.days === 0){
-      return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня"></div>`;
+      return `<div class="seg-stub ${kindClass} ${statusClass}" style="left:${left}px" data-tip="${seg.label} · начали сегодня" ${idxAttrs}></div>`;
     }
     const text = width > 50 ? seg.label : "";
-    return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip}">${text}</div>`;
+    return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip}" ${idxAttrs}>${text}</div>`;
   }).join("");
   return `<div class="track-row ${roleClass}">${segHtml}</div>`;
 }
@@ -453,9 +471,9 @@ function renderCard(bort, idx, sharedAxisTotal){
       ? `<div class="label-group">${subTracks.map(t=>`<div class="track-name sub">${t.name}</div>`).join("")}</div>`
       : "");
 
-  const rowsHtml = renderTrackRow(mainTrack, "main") +
+  const rowsHtml = renderTrackRow(mainTrack, "main", idx, 0) +
     (subTracks.length
-      ? `<div class="track-group">${subTracks.map(t=>renderTrackRow(t,"sub")).join("")}</div>`
+      ? `<div class="track-group">${subTracks.map((t, ti) => renderTrackRow(t, "sub", idx, ti + 1)).join("")}</div>`
       : "");
 
   let connectorHtml = "";
@@ -572,8 +590,229 @@ function bindTooltips(){
     seg.addEventListener("click", ()=>{
       trackEvent("click_segment", tip, {left: seg.style.left, width: seg.style.width});
     });
+    seg.addEventListener("contextmenu", e=>{
+      e.preventDefault();
+      const idx = Number(seg.dataset.bortIdx);
+      const trackIdx = Number(seg.dataset.trackIdx);
+      const bort = DATA[idx];
+      const track = bort.tracks[trackIdx];
+      const segIdx = Number(seg.dataset.segIdx);
+      const segData = track.segments[segIdx];
+      showCtxMenu(e.clientX, e.clientY, bort, track, segData, idx, trackIdx, segIdx);
+    });
   });
 }
+
+/* ---- Контекстное меню: правый клик на сегменте ---- */
+
+const ctxMenu = document.createElement("div");
+ctxMenu.className = "ctx-menu";
+ctxMenu.id = "ctx-menu";
+document.body.appendChild(ctxMenu);
+let ctxCtx = null;  // {bort, track, seg, idx, trackIdx, segIdx}
+
+const KIND_OPTIONS = [
+  ["work", "Работа"], ["test", "Тест"], ["think", "Разбор"],
+  ["hold-parts", "Холд · нет запчастей"],
+  ["hold-people", "Холд · нет человека"],
+  ["hold-approve", "Холд · нет решения"],
+];
+const STATUS_OPTIONS = [["active", "active"], ["done", "done"], ["planned", "planned"]];
+
+function renderCtxMenu(bort, track, seg, idx, trackIdx){
+  const kindLabel = KIND_OPTIONS.find(k => k[0] === seg.kind)?.[1] || seg.kind;
+  const onlyOneTrack = bort.tracks.length === 1;
+  const onlyOneSeg = track.segments.length === 1;
+  const submenuItems = (label, hint, options) => `
+    <div class="ctx-label">${label}</div>
+    ${options.map(([v, l]) =>
+      `<div class="ctx-item" data-action="set:${label.split(' ')[0].toLowerCase()}:${v}">
+         <span>${l}</span>${v === seg[label === 'Kind' ? 'kind' : 'status'] ? '<span class="ctx-hint">●</span>' : ''}
+       </div>`
+    ).join("")}
+    <div class="ctx-sep"></div>
+  `;
+  return `
+    <div class="ctx-label">${bort.id} · ${track.name}</div>
+    <div class="ctx-item disabled"><span>Сегмент</span><span class="ctx-hint">${seg.label}</span></div>
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-label">Тип</div>
+    ${KIND_OPTIONS.map(([v, l]) =>
+      `<div class="ctx-item" data-action="set:kind:${v}">
+         <span>${l}</span>${v === seg.kind ? '<span class="ctx-hint">●</span>' : ''}
+       </div>`
+    ).join("")}
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-label">Статус</div>
+    ${STATUS_OPTIONS.map(([v, l]) =>
+      `<div class="ctx-item" data-action="set:status:${v}">
+         <span>${v}</span>${v === seg.status ? '<span class="ctx-hint">●</span>' : ''}
+       </div>`
+    ).join("")}
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="set_start"><span>Стартовый день: <span class="ctx-hint">${seg.start}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-label">Трек</div>
+    <div class="ctx-item" data-action="rename_track"><span>Переименовать трек</span></div>
+    ${onlyOneTrack ? "" : `<div class="ctx-item danger" data-action="del_track"><span>Удалить трек</span>` + (onlyOneSeg ? " <span class='ctx-hint'>(пуст)</span>" : "") + `</div>`}
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-label">Борт</div>
+    <div class="ctx-item" data-action="rename_bort"><span>Переименовать (описание)</span></div>
+    <div class="ctx-item" data-action="add_subtask"><span>+ подзадача</span></div>
+    <div class="ctx-item danger" data-action="del_bort"><span>Удалить борт</span></div>
+  `;
+}
+
+function showCtxMenu(x, y, bort, track, seg, idx, trackIdx, segIdx){
+  ctxCtx = {bort, track, seg, idx, trackIdx, segIdx};
+  ctxMenu.innerHTML = renderCtxMenu(bort, track, seg, idx, trackIdx);
+  ctxMenu.querySelectorAll(".ctx-item").forEach(it => {
+    if (it.classList.contains("disabled")) return;
+    it.onclick = (ev) => {
+      ev.stopPropagation();
+      runCtxAction(it.dataset.action);
+      hideCtxMenu();
+    };
+  });
+  ctxMenu.style.left = x + "px";
+  ctxMenu.style.top = y + "px";
+  ctxMenu.classList.add("show");
+  // если выходит за экран — отразить
+  const r = ctxMenu.getBoundingClientRect();
+  if (r.right > window.innerWidth) ctxMenu.style.left = (x - r.width) + "px";
+  if (r.bottom > window.innerHeight) ctxMenu.style.top = (y - r.height) + "px";
+  trackEvent("context_open", `${bort.id}/track/${trackIdx}/seg/${segIdx}`, {
+    kind: seg.kind, status: seg.status, days: seg.days, start: seg.start,
+  });
+}
+
+function hideCtxMenu(){
+  ctxMenu.classList.remove("show");
+  ctxCtx = null;
+}
+
+async function runCtxAction(action){
+  if (!ctxCtx) return;
+  const {bort, track, seg, idx, trackIdx, segIdx} = ctxCtx;
+  const segId = seg.id;
+  const trackId = track.id;
+  const bortId = bort.id;
+
+  // set:kind:work / set:status:done
+  if (action.startsWith("set:kind:") || action.startsWith("set:status:")){
+    const [_, field, value] = action.split(":");
+    const patch = field === "kind" ? {kind: value} : {status: value};
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action, field, value});
+    apiPatch(`/api/borts/${bortId}/segments/${segId}`, patch, "тип/статус обновлён");
+    if (field === "kind"){ seg.kind = value; seg.label = KIND_OPTIONS.find(k => k[0] === value)[1]; }
+    if (field === "status") seg.status = value;
+    renderAll();
+    return;
+  }
+
+  if (action === "set_days"){
+    const v = prompt("Длительность (дней, ≥ 0):", String(seg.days));
+    if (v === null) return;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0){ alert("Должно быть числом ≥ 0"); return; }
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_days", days: n});
+    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {days: n}, "длительность обновлена");
+    seg.days = n; renderAll();
+    return;
+  }
+  if (action === "set_start"){
+    const v = prompt("Стартовый день (от 0):", String(seg.start));
+    if (v === null) return;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0){ alert("Должно быть числом ≥ 0"); return; }
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_start", start: n});
+    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {start: n}, "старт обновлён");
+    seg.start = n; renderAll();
+    return;
+  }
+  if (action === "del_seg"){
+    if (!confirm(`Удалить сегмент «${seg.label}»?`)) return;
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "del_seg"});
+    apiDelete(`/api/borts/${bortId}/segments/${segId}`, "сегмент удалён");
+    track.segments.splice(segIdx, 1);
+    renderAll();
+    return;
+  }
+  if (action === "rename_track"){
+    const v = prompt("Новое имя трека:", track.name);
+    if (v === null || !v.trim()) return;
+    trackEvent("context_action", `${bortId}/track/${trackId}`, {action: "rename_track", new_name: v.trim()});
+    apiPatch(`/api/borts/${bortId}/tracks/${trackId}`, {name: v.trim()}, "трек переименован");
+    track.name = v.trim(); renderAll();
+    return;
+  }
+  if (action === "del_track"){
+    if (!confirm(`Удалить трек «${track.name}» вместе со всеми сегментами?`)) return;
+    trackEvent("context_action", `${bortId}/track/${trackId}`, {action: "del_track"});
+    apiDelete(`/api/borts/${bortId}/tracks/${trackId}`, "трек удалён");
+    bort.tracks.splice(trackIdx, 1);
+    renderAll();
+    return;
+  }
+  if (action === "rename_bort"){
+    const v = prompt("Новое описание борта:", bort.desc);
+    if (v === null) return;
+    trackEvent("context_action", bortId, {action: "rename_bort"});
+    apiPatch(`/api/borts/${bortId}`, {desc: v}, "описание обновлено");
+    bort.desc = v; renderAll();
+    return;
+  }
+  if (action === "add_subtask"){
+    const v = prompt("Имя новой подзадачи:");
+    if (!v || !v.trim()) return;
+    trackEvent("context_action", bortId, {action: "add_subtask", name: v.trim()});
+    pushSubtask(bortId, {name: v.trim(), today_index: TODAY_INDEX, session_id: SESSION_ID});
+    return;
+  }
+  if (action === "del_bort"){
+    if (!confirm(`Удалить борт ${bort.id} и все его треки?`)) return;
+    trackEvent("context_action", bortId, {action: "del_bort"});
+    apiDelete(`/api/borts/${bortId}`, "борт удалён");
+    DATA.splice(idx, 1);
+    renderAll();
+    return;
+  }
+}
+
+function apiPatch(url, body, okMsg){
+  fetch(url, {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({...body, session_id: SESSION_ID}),
+  })
+    .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(() => setStatus(okMsg + " · " + dateLabel(TODAY_INDEX)))
+    .catch(err => setStatus("ошибка API: " + err.message));
+}
+
+function apiDelete(url, okMsg){
+  fetch(url + "?session_id=" + encodeURIComponent(SESSION_ID), {method: "DELETE"})
+    .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(d => setStatus(okMsg + ` (вместе: ${d.segments_deleted ?? d.tracks_deleted ?? 0}) · ` + dateLabel(TODAY_INDEX)))
+    .catch(err => setStatus("ошибка API: " + err.message));
+}
+
+// закрытие контекстного меню
+document.addEventListener("click", e => {
+  if (!ctxMenu.contains(e.target)) hideCtxMenu();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") hideCtxMenu();
+});
+window.addEventListener("blur", hideCtxMenu);
+window.addEventListener("resize", hideCtxMenu);
 
 // все таймлайны (общая линейка + каждая карточка) скроллятся синхронно
 function bindSyncedScroll(){
