@@ -79,8 +79,6 @@ def _row_to_bort(r, tracks: list[dict], logs: list[dict]) -> dict:
         "caseStart": r["case_start"],
         "tracks": tracks,
         "log": logs,
-        "assignee": r["assignee"] or "",
-        "dept": r["dept"] or "",
         "priority": r["priority"] or 0,
     }
 
@@ -464,12 +462,6 @@ def patch_bort(bort_id: str, req: BortPatchRequest):
         if req.desc is not None:
             updates.append("desc = ?"); params.append(req.desc)
             changes["old_desc"] = b["desc"]; changes["new_desc"] = req.desc
-        if req.assignee is not None:
-            updates.append("assignee = ?"); params.append(req.assignee)
-            changes["old_assignee"] = b["assignee"]; changes["new_assignee"] = req.assignee
-        if req.dept is not None:
-            updates.append("dept = ?"); params.append(req.dept)
-            changes["old_dept"] = b["dept"]; changes["new_dept"] = req.dept
         if not updates:
             raise HTTPException(400, "nothing to update")
         params.append(bort_id)
@@ -505,9 +497,9 @@ def create_bort(req: BortCreateRequest):
         if conn.execute("SELECT 1 FROM borts WHERE id = ?", (bort_id,)).fetchone():
             raise HTTPException(409, f"bort {bort_id} already exists")
         conn.execute(
-            "INSERT INTO borts (id, desc, priority, assignee, dept, case_start) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (bort_id, req.desc, req.priority, req.assignee, req.dept, req.case_start),
+            "INSERT INTO borts (id, desc, priority, case_start) "
+            "VALUES (?, ?, ?, ?)",
+            (bort_id, req.desc, req.priority, req.case_start),
         )
         _write_event(conn, req.session_id, "bort_create", bort_id, {
             "desc": req.desc, "case_start": req.case_start,
@@ -723,7 +715,7 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
 _TEST_DATA = [
     {
         "id": "FPV-01", "desc": "нет телеметрии, протокол не MAVLink — разбираемся",
-        "dept": "телеметрия", "assignee": "Саша", "case_start": 20, "priority": 1,
+        "case_start": 20, "priority": 1,
         "tracks": [
             {"name": "Диагностика телеметрии", "sub": False, "segments": [
                 {"kind": "think", "label": "Разбор", "start": 20, "days": 1, "status": "active"},
@@ -735,7 +727,7 @@ _TEST_DATA = [
     },
     {
         "id": "FPV-03", "desc": "интеграция Hikvision PTZ — кронштейн + сборка",
-        "dept": "механика", "assignee": "Коля", "case_start": 0, "priority": 2,
+        "case_start": 0, "priority": 2,
         "tracks": [
             {"name": "Прошивка электроники", "sub": False, "segments": [
                 {"kind": "think", "label": "Разбор", "start": 0, "days": 1, "status": "done", "dept": "телеметрия", "assignee": "Саша"},
@@ -759,7 +751,7 @@ _TEST_DATA = [
     },
     {
         "id": "FPV-05", "desc": "нестабильное видео, подозрение на Majestic",
-        "dept": "видео", "assignee": "Миша", "case_start": 15, "priority": 1,
+        "case_start": 15, "priority": 1,
         "tracks": [
             {"name": "Работа над видео", "sub": False, "segments": [
                 {"kind": "work", "label": "Замена антенны", "start": 15, "days": 2, "status": "done", "dept": "видео", "assignee": "Миша"},
@@ -777,7 +769,7 @@ _TEST_DATA = [
     },
     {
         "id": "FPV-07", "desc": "замена регуля после краша",
-        "dept": "механика", "assignee": "Коля", "case_start": 18, "priority": 2,
+        "case_start": 18, "priority": 2,
         "tracks": [
             {"name": "Замена ESC", "sub": False, "segments": [
                 {"kind": "work", "label": "Демонтаж", "start": 18, "days": 1, "status": "done"},
@@ -793,7 +785,7 @@ _TEST_DATA = [
     },
     {
         "id": "FPV-09", "desc": "прошивка под управление через ELRS",
-        "dept": "телеметрия", "assignee": "Саша", "case_start": 22, "priority": 3,
+        "case_start": 22, "priority": 3,
         "tracks": [
             {"name": "Переход на ELRS", "sub": False, "segments": [
                 {"kind": "think", "label": "Изучение", "start": 22, "days": 2, "status": "active"},
@@ -806,7 +798,7 @@ _TEST_DATA = [
     },
     {
         "id": "FPV-11", "desc": "командная задача — нужен электронщик, но не критично кто",
-        "dept": "электроника", "assignee": "", "case_start": 22, "priority": 4,
+        "case_start": 22, "priority": 4,
         "tracks": [
             {"name": "Ревизия платы", "sub": False, "segments": [
                 {"kind": "think", "label": "Осмотр", "start": 22, "days": 1, "status": "active"},
@@ -831,9 +823,9 @@ def seed_test_data():
             if existing:
                 conn.execute("DELETE FROM borts WHERE id = ?", (b["id"],))
             conn.execute(
-                "INSERT INTO borts (id, desc, priority, assignee, dept, case_start) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (b["id"], b["desc"], b["priority"], b["assignee"], b.get("dept", ""), b["case_start"]),
+                "INSERT INTO borts (id, desc, priority, case_start) "
+                "VALUES (?, ?, ?, ?)",
+                (b["id"], b["desc"], b["priority"], b["case_start"]),
             )
             for t_idx, t in enumerate(b["tracks"]):
                 cur = conn.execute(

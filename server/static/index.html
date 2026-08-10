@@ -96,12 +96,6 @@
     letter-spacing:.02em;line-height:1.4;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;}
   .bort-id .bort-desc-inline{font-family:'Inter',sans-serif;font-weight:400;
     color:var(--muted);font-size:12px;letter-spacing:0;}
-  .bort-id .bort-assignee{font-family:'Inter',sans-serif;font-weight:500;
-    color:var(--accent);font-size:11.5px;letter-spacing:0;}
-  .bort-id .bort-dept{font-family:'Inter',sans-serif;font-weight:600;
-    color:var(--accent);font-size:12px;letter-spacing:0;padding:1px 7px;
-    border:1px solid var(--accent);border-radius:4px;text-transform:lowercase;}
-  .bort-id .bort-assignee{color:var(--muted);font-weight:400;font-style:italic;}
   .day-badge{font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--panel-2);
     border:1px solid var(--line);border-radius:6px;padding:4px 9px;white-space:nowrap;color:var(--text);}
   .day-badge b{color:#fff;}
@@ -663,8 +657,6 @@ function renderCard(bort, idx, sharedAxisTotal){
       <div>
         <div class="bort-id">
           <span>${bort.id}</span>
-          ${bort.dept ? `<span class="bort-dept">${bort.dept}</span>` : ''}
-          ${bort.assignee ? `<span class="bort-assignee">${bort.assignee}</span>` : ''}
           ${bort.desc ? `<span class="bort-desc-inline">${bort.desc}</span>` : ''}
         </div>
       </div>
@@ -836,8 +828,6 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
 
     <div class="ctx-label">Борт</div>
     <div class="ctx-item" data-action="rename_bort"><span>Переименовать (описание)</span></div>
-    <div class="ctx-item" data-action="dept_bort"><span>Отдел: <span class="ctx-hint">${bort.dept || 'не назначен'}</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="assign_bort"><span>Исполнитель: <span class="ctx-hint">${bort.assignee || '—'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="add_subtask"><span>+ подзадача</span></div>
     <div class="ctx-item danger" data-action="del_bort"><span>Удалить борт</span></div>
   `;
@@ -1007,22 +997,6 @@ async function runCtxAction(action){
     trackEvent("context_action", bortId, {action: "rename_bort"});
     apiPatch(`/api/borts/${bortId}`, {desc: v}, "описание обновлено");
     bort.desc = v; renderAll();
-    return;
-  }
-  if (action === "assign_bort"){
-    const v = prompt("Исполнитель (имя, опционально):", bort.assignee || "");
-    if (v === null) return;
-    trackEvent("context_action", bortId, {action: "assign_bort", assignee: v.trim()});
-    apiPatch(`/api/borts/${bortId}`, {assignee: v.trim()}, "исполнитель назначен");
-    bort.assignee = v.trim(); renderAll();
-    return;
-  }
-  if (action === "dept_bort"){
-    const v = prompt("Отдел (например: механика, видео, телеметрия, электроника):", bort.dept || "");
-    if (v === null) return;
-    trackEvent("context_action", bortId, {action: "dept_bort", dept: v.trim()});
-    apiPatch(`/api/borts/${bortId}`, {dept: v.trim()}, "отдел назначен");
-    bort.dept = v.trim(); renderAll();
     return;
   }
   if (action === "add_subtask"){
@@ -1851,8 +1825,6 @@ async function createNewBort(){
   const cleanId = id.trim().toUpperCase();
   if (DATA.some(b => b.id === cleanId)){ alert("Борт " + cleanId + " уже существует"); return; }
   const desc = prompt("Описание (опционально):", "") || "";
-  const dept = prompt("Отдел (механика, видео, телеметрия, электроника...):", "") || "";
-  const assignee = prompt("Исполнитель (имя, опционально):", "") || "";
 
   // Получить список шаблонов для выбора
   let templateId = null;
@@ -1880,7 +1852,7 @@ async function createNewBort(){
     }
   } catch(e){ /* молча — без шаблона */ }
 
-  trackEvent("bort_create_intent", cleanId, {desc, dept, assignee, template_id: templateId});
+  trackEvent("bort_create_intent", cleanId, {desc, template_id: templateId});
 
   // создаём борт
   let ok = true;
@@ -1891,8 +1863,6 @@ async function createNewBort(){
       body: JSON.stringify({
         id: cleanId,
         desc: desc,
-        dept: dept,
-        assignee: assignee,
         case_start: TODAY_INDEX,
         session_id: SESSION_ID,
       }),
