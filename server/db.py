@@ -72,6 +72,13 @@ CREATE TABLE IF NOT EXISTS queue (
     reason TEXT NOT NULL,
     ord    INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS templates (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    definition  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

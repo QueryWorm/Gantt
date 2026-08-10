@@ -17,6 +17,8 @@ from .schemas import (
     MutateRequest, SubtaskRequest, EventRequest, EventStats,
     SegmentPatchRequest, TrackPatchRequest, BortPatchRequest,
     BortCreateRequest, LogEntryRequest,
+    TemplateRequest, TemplateApplyRequest, TemplateSummary, Template,
+    TemplateTrack, TemplateSegment,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -75,6 +77,8 @@ def _row_to_bort(r, tracks: list[dict], logs: list[dict]) -> dict:
         "caseStart": r["case_start"],
         "tracks": tracks,
         "log": logs,
+        "assignee": r["assignee"] or "",
+        "priority": r["priority"] or 0,
     }
 
 
@@ -445,10 +449,20 @@ def patch_bort(bort_id: str, req: BortPatchRequest):
         b = conn.execute("SELECT * FROM borts WHERE id = ?", (bort_id,)).fetchone()
         if not b:
             raise HTTPException(404, f"bort {bort_id} not found")
-        conn.execute("UPDATE borts SET desc = ? WHERE id = ?", (req.desc, bort_id))
-        _write_event(conn, req.session_id, "bort_patch", bort_id, {
-            "old_desc": b["desc"], "new_desc": req.desc,
-        })
+        updates = []
+        params = []
+        changes = {}
+        if req.desc is not None:
+            updates.append("desc = ?"); params.append(req.desc)
+            changes["old_desc"] = b["desc"]; changes["new_desc"] = req.desc
+        if req.assignee is not None:
+            updates.append("assignee = ?"); params.append(req.assignee)
+            changes["old_assignee"] = b["assignee"]; changes["new_assignee"] = req.assignee
+        if not updates:
+            raise HTTPException(400, "nothing to update")
+        params.append(bort_id)
+        conn.execute(f"UPDATE borts SET {', '.join(updates)} WHERE id = ?", params)
+        _write_event(conn, req.session_id, "bort_patch", bort_id, changes)
         conn.commit()
     return {"ok": True}
 
@@ -563,6 +577,259 @@ def events_stats(n: int = Query(20, ge=1, le=500)):
         by_type={r["type"]: r["c"] for r in by_type_rows},
         last_n=last,
     )
+
+
+# ---- Шаблоны пайплайна ----
+
+
+# ---- Шаблоны пайплайна ----
+
+@app.get("/api/templates", response_model=list[TemplateSummary])
+def list_templates():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, name, definition FROM templates ORDER BY created_at").fetchall()
+        result = []
+        for r in rows:
+            try:
+                defn = _json.loads(r["definition"])
+            except _json.JSONDecodeError:
+                defn = {"tracks": []}
+            tracks = defn.get("tracks", [])
+            n_segs = sum(len(t.get("segments", [])) for t in tracks)
+            result.append(TemplateSummary(
+                id=r["id"], name=r["name"],
+                tracks_count=len(tracks), segments_count=n_segs,
+            ))
+        return result
+
+
+@app.get("/api/templates/{template_id}", response_model=Template)
+def get_template(template_id: str):
+    with get_conn() as conn:
+        r = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+        if not r:
+            raise HTTPException(404, f"template {template_id} not found")
+        try:
+            defn = _json.loads(r["definition"])
+        except _json.JSONDecodeError:
+            defn = {"tracks": []}
+        return Template(id=r["id"], name=r["name"], tracks=defn.get("tracks", []))
+
+
+@app.post("/api/templates")
+def create_template(req: TemplateRequest):
+    tid = req.id.strip()
+    if not tid:
+        raise HTTPException(400, "id is required")
+    if not req.name.strip():
+        raise HTTPException(400, "name is required")
+    if not req.tracks:
+        raise HTTPException(400, "at least one track required")
+    definition = {"tracks": [t.model_dump() for t in req.tracks]}
+    with get_conn() as conn:
+        if conn.execute("SELECT 1 FROM templates WHERE id = ?", (tid,)).fetchone():
+            raise HTTPException(409, f"template {tid} already exists")
+        conn.execute(
+            "INSERT INTO templates (id, name, definition) VALUES (?, ?, ?)",
+            (tid, req.name.strip(), _json.dumps(definition, ensure_ascii=False)),
+        )
+        _write_event(conn, req.session_id, "template_create", tid, {
+            "name": req.name, "tracks_count": len(req.tracks),
+        })
+        conn.commit()
+    return {"ok": True, "id": tid}
+
+
+@app.delete("/api/templates/{template_id}")
+def delete_template(template_id: str, session_id: str = ""):
+    with get_conn() as conn:
+        r = conn.execute("SELECT id, name FROM templates WHERE id = ?", (template_id,)).fetchone()
+        if not r:
+            raise HTTPException(404, f"template {template_id} not found")
+        conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+        _write_event(conn, session_id, "template_delete", template_id, {"name": r["name"]})
+        conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/borts/{bort_id}/apply_template")
+def apply_template(bort_id: str, req: TemplateApplyRequest):
+    """Применяет шаблон к борту: добавляет tracks и segments.
+    Если у борта уже есть треки — добавляет к ним. Сегменты из шаблона
+    становятся planned, начиная с req.today_index."""
+    with get_conn() as conn:
+        tpl = conn.execute("SELECT * FROM templates WHERE id = ?", (req.template_id,)).fetchone()
+        if not tpl:
+            raise HTTPException(404, f"template {req.template_id} not found")
+        if not conn.execute("SELECT 1 FROM borts WHERE id = ?", (bort_id,)).fetchone():
+            raise HTTPException(404, f"bort {bort_id} not found")
+
+        try:
+            defn = _json.loads(tpl["definition"])
+        except _json.JSONDecodeError:
+            raise HTTPException(500, "template definition is corrupt")
+
+        tracks_added = 0
+        segs_added = 0
+        max_track_ord = conn.execute(
+            "SELECT COALESCE(MAX(ord), -1) FROM tracks WHERE bort_id = ?", (bort_id,),
+        ).fetchone()[0]
+        cursor = req.today_index
+        for t in defn.get("tracks", []):
+            max_track_ord += 1
+            cur = conn.execute(
+                "INSERT INTO tracks (bort_id, name, is_sub, ord) VALUES (?, ?, ?, ?)",
+                (bort_id, t["name"], int(t.get("sub", False)), max_track_ord),
+            )
+            track_id = cur.lastrowid
+            tracks_added += 1
+            track_cursor = cursor
+            for s_idx, s in enumerate(t.get("segments", [])):
+                start = track_cursor
+                days = max(0, int(s.get("days", 0)))
+                conn.execute(
+                    "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
+                    "VALUES (?, ?, ?, ?, ?, 'planned', ?)",
+                    (track_id, s["kind"], s.get("label", s["kind"]), start, days, s_idx),
+                )
+                segs_added += 1
+                track_cursor += days
+            cursor = max(cursor, track_cursor)
+
+        _write_event(conn, req.session_id, "template_apply", bort_id, {
+            "template_id": req.template_id,
+            "tracks_added": tracks_added,
+            "segments_added": segs_added,
+        })
+        conn.commit()
+    return {"ok": True, "tracks_added": tracks_added, "segments_added": segs_added}
+
+
+# ---- Тестовые данные ----
+
+_TEST_DATA = [
+    {
+        "id": "FPV-01", "desc": "нет телеметрии, протокол не MAVLink — разбираемся",
+        "assignee": "Саша (телеметрия)", "case_start": 20, "priority": 1,
+        "tracks": [
+            {"name": "Диагностика телеметрии", "sub": False, "segments": [
+                {"kind": "think", "label": "Разбор", "start": 20, "days": 1, "status": "active"},
+            ]},
+        ],
+        "log": [
+            {"date": "09.08", "stage": "Разбор", "text": "Сняли дамп UART, протокол не MAVLink, похоже на проприетарный."},
+        ],
+    },
+    {
+        "id": "FPV-03", "desc": "интеграция Hikvision PTZ — кронштейн + сборка",
+        "assignee": "Коля (механика)", "case_start": 0, "priority": 2,
+        "tracks": [
+            {"name": "Прошивка электроники", "sub": False, "segments": [
+                {"kind": "think", "label": "Разбор", "start": 0, "days": 1, "status": "done"},
+                {"kind": "work", "label": "Прошивка", "start": 1, "days": 3, "status": "done"},
+                {"kind": "hold-people", "label": "Холд", "start": 6, "days": 15, "status": "active"},
+                {"kind": "test", "label": "Тест (план)", "start": 21, "days": 2, "status": "planned"},
+            ]},
+            {"name": "Разработка кронштейна", "sub": True, "segments": [
+                {"kind": "work", "label": "Разработка", "start": 1, "days": 3, "status": "done"},
+            ]},
+            {"name": "Сварка кронштейна", "sub": True, "segments": [
+                {"kind": "work", "label": "Сварка", "start": 4, "days": 2, "status": "done"},
+            ]},
+        ],
+        "log": [
+            {"date": "09.08", "stage": "Холд", "text": "Кронштейн сварен и прошивка готова ещё с 25.07 — сборщик всё это время занят на других бортах."},
+            {"date": "25.07", "stage": "Сварка → Холд", "text": "Сварка кронштейна закончена, сошлись на сборке — и тут же встали."},
+            {"date": "23.07", "stage": "Разработка → Сварка", "text": "Чертежи кронштейна утверждены, сварка стартовала следом."},
+            {"date": "20.07", "stage": "Разбор → Работа", "text": "Начали прошивку и разработку кронштейна параллельно."},
+        ],
+    },
+    {
+        "id": "FPV-05", "desc": "нестабильное видео, подозрение на Majestic",
+        "assignee": "Миша (видео)", "case_start": 15, "priority": 1,
+        "tracks": [
+            {"name": "Работа над видео", "sub": False, "segments": [
+                {"kind": "work", "label": "Замена антенны", "start": 15, "days": 2, "status": "done"},
+                {"kind": "test", "label": "Тест №1", "start": 17, "days": 1, "status": "done"},
+                {"kind": "work", "label": "Доработка", "start": 18, "days": 2, "status": "done"},
+                {"kind": "test", "label": "Тест №2", "start": 20, "days": 1, "status": "active"},
+                {"kind": "work", "label": "Возврат в строй (план)", "start": 21, "days": 1, "status": "planned"},
+            ]},
+        ],
+        "log": [
+            {"date": "09.08", "stage": "Тест №2", "text": "Второй облёт, видео стабильно — ждём подтверждения на дистанции."},
+            {"date": "06.08", "stage": "Доработка", "text": "Тест №1 показал зависания на 300м+, откатили прошивку Majestic."},
+            {"date": "05.08", "stage": "Тест №1", "text": "Первый тест после замены антенны."},
+        ],
+    },
+    {
+        "id": "FPV-07", "desc": "замена регуля после краша",
+        "assignee": "Коля (механика)", "case_start": 18, "priority": 2,
+        "tracks": [
+            {"name": "Замена ESC", "sub": False, "segments": [
+                {"kind": "work", "label": "Демонтаж", "start": 18, "days": 1, "status": "done"},
+                {"kind": "hold-parts", "label": "Ожидание ESC", "start": 19, "days": 4, "status": "active"},
+                {"kind": "work", "label": "Установка", "start": 23, "days": 1, "status": "planned"},
+                {"kind": "test", "label": "Тест", "start": 24, "days": 1, "status": "planned"},
+            ]},
+        ],
+        "log": [
+            {"date": "07.08", "stage": "Холд · нет запчастей", "text": "Заказали ESC с Ali, доставка 4-5 дней."},
+            {"date": "06.08", "stage": "Демонтаж", "text": "Сняли сгоревший регуль, обмотка в порядке."},
+        ],
+    },
+    {
+        "id": "FPV-09", "desc": "прошивка под управление через ELRS",
+        "assignee": "Саша (телеметрия)", "case_start": 22, "priority": 3,
+        "tracks": [
+            {"name": "Переход на ELRS", "sub": False, "segments": [
+                {"kind": "think", "label": "Изучение", "start": 22, "days": 2, "status": "active"},
+                {"kind": "work", "label": "Прошивка TX", "start": 24, "days": 1, "status": "planned"},
+                {"kind": "work", "label": "Прошивка RX", "start": 25, "days": 1, "status": "planned"},
+                {"kind": "test", "label": "Полевой тест", "start": 26, "days": 2, "status": "planned"},
+            ]},
+        ],
+        "log": [],
+    },
+]
+
+
+@app.post("/api/seed-test")
+def seed_test_data():
+    """Заполняет БД расширенным набором тестовых бортов с исполнителями.
+    Перезаписывает существующие (id-шники совпадают с затрагиваемыми)."""
+    created = 0
+    with get_conn() as conn:
+        for b in _TEST_DATA:
+            existing = conn.execute("SELECT id FROM borts WHERE id = ?", (b["id"],)).fetchone()
+            if existing:
+                conn.execute("DELETE FROM borts WHERE id = ?", (b["id"],))
+            conn.execute(
+                "INSERT INTO borts (id, desc, priority, assignee, case_start) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (b["id"], b["desc"], b["priority"], b["assignee"], b["case_start"]),
+            )
+            for t_idx, t in enumerate(b["tracks"]):
+                cur = conn.execute(
+                    "INSERT INTO tracks (bort_id, name, is_sub, ord) VALUES (?, ?, ?, ?)",
+                    (b["id"], t["name"], int(t.get("sub", False)), t_idx),
+                )
+                track_id = cur.lastrowid
+                for s_idx, s in enumerate(t["segments"]):
+                    conn.execute(
+                        "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (track_id, s["kind"], s["label"], s["start"], s["days"], s["status"], s_idx),
+                    )
+            for l in b.get("log", []):
+                conn.execute(
+                    "INSERT INTO log_entries (bort_id, date, stage, text) VALUES (?, ?, ?, ?)",
+                    (b["id"], l["date"], l["stage"], l["text"]),
+                )
+            created += 1
+        _write_event(conn, "seed-test", "seed", "seed-test", {"created": created})
+        conn.commit()
+    return {"ok": True, "created": created}
 
 
 # ---- static: отдаём тот же HTML ----

@@ -37,6 +37,8 @@ class Bort(BaseModel):
     caseStart: int = 0
     tracks: list[Track] = Field(default_factory=list)
     log: list[LogEntry] = Field(default_factory=list)
+    assignee: str = ""
+    priority: int = 0
 
 
 class QueueItem(BaseModel):
@@ -75,6 +77,33 @@ class LogEntryRequest(BaseModel):
     session_id: str = ""
 
 
+class TemplateTrack(BaseModel):
+    name: str
+    sub: bool = False
+    segments: list["TemplateSegment"] = Field(default_factory=list)
+
+
+class TemplateSegment(BaseModel):
+    kind: str
+    label: str
+    days: int = 0
+
+
+class TemplateRequest(BaseModel):
+    """POST /api/templates — создать шаблон."""
+    id: str
+    name: str
+    tracks: list[TemplateTrack]
+    session_id: str = ""
+
+
+class TemplateApplyRequest(BaseModel):
+    """POST /api/borts/{id}/apply_template — применить шаблон к борту."""
+    template_id: str
+    today_index: int = 0
+    session_id: str = ""
+
+
 class EventRequest(BaseModel):
     """POST /api/events — трекинг действия тестера."""
     session_id: str
@@ -100,8 +129,9 @@ class TrackPatchRequest(BaseModel):
 
 
 class BortPatchRequest(BaseModel):
-    """PATCH /api/borts/{id} — изменить desc."""
-    desc: str
+    """PATCH /api/borts/{id} — изменить desc/assignee."""
+    desc: Optional[str] = None
+    assignee: Optional[str] = None
     session_id: str = ""
 
 
@@ -119,3 +149,16 @@ class EventStats(BaseModel):
     total: int
     by_type: dict[str, int]
     last_n: list[dict]
+
+
+class TemplateSummary(BaseModel):
+    id: str
+    name: str
+    tracks_count: int
+    segments_count: int
+
+
+class Template(BaseModel):
+    id: str
+    name: str
+    tracks: list[TemplateTrack]

@@ -93,8 +93,11 @@
 
   .card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
   .bort-id{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--text);
-    letter-spacing:.02em;}
-  .bort-desc{font-size:12.5px;color:var(--muted);margin-top:2px;}
+    letter-spacing:.02em;line-height:1.4;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;}
+  .bort-id .bort-desc-inline{font-family:'Inter',sans-serif;font-weight:400;
+    color:var(--muted);font-size:12px;letter-spacing:0;}
+  .bort-id .bort-assignee{font-family:'Inter',sans-serif;font-weight:500;
+    color:var(--accent);font-size:11.5px;letter-spacing:0;}
   .day-badge{font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--panel-2);
     border:1px solid var(--line);border-radius:6px;padding:4px 9px;white-space:nowrap;color:var(--text);}
   .day-badge b{color:#fff;}
@@ -277,6 +280,8 @@
         <label class="file-btn" for="load-input" id="fallback-load-label" title="Резервный вариант, если браузер не поддерживает автосвязь">📂 Загрузить вручную</label>
         <input type="file" id="load-input" accept="application/json" hidden>
         <button class="file-btn" id="new-bort-btn" title="Создать новый ремонт (борт)">+ ремонт</button>
+        <button class="file-btn" id="templates-btn" title="Управление шаблонами">📋 Шаблоны</button>
+        <button class="file-btn" id="seed-test-btn" title="Сгенерировать тестовые борта с исполнителями">🧪 Тест</button>
       </div>
       <div class="file-status" id="file-status">данные только в этой вкладке — не сохраняются</div>
       <div class="clock">Обновлено <b>сегодня</b><br>09.08.2026</div>
@@ -596,8 +601,11 @@ function renderCard(bort, idx, sharedAxisTotal){
     <button class="card-close" data-idx="${idx}" title="Удалить ремонт (правый клик на сегмент → Борт → Удалить)">✕</button>
     <div class="card-head">
       <div>
-        <div class="bort-id">${bort.id}</div>
-        <div class="bort-desc">${bort.desc}</div>
+        <div class="bort-id">
+          <span>${bort.id}</span>
+          ${bort.assignee ? `<span class="bort-assignee">@${bort.assignee}</span>` : ''}
+          ${bort.desc ? `<span class="bort-desc-inline">${bort.desc}</span>` : ''}
+        </div>
       </div>
       <div class="day-badge">Д+<b>${TODAY_INDEX - bort.caseStart}</b> <span class="plan-note">/ план до ${dateLabel(ownFinish)}</span></div>
     </div>
@@ -765,6 +773,7 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
 
     <div class="ctx-label">Борт</div>
     <div class="ctx-item" data-action="rename_bort"><span>Переименовать (описание)</span></div>
+    <div class="ctx-item" data-action="assign_bort"><span>Исполнитель: <span class="ctx-hint">${bort.assignee || 'не назначен'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="add_subtask"><span>+ подзадача</span></div>
     <div class="ctx-item danger" data-action="del_bort"><span>Удалить борт</span></div>
   `;
@@ -918,6 +927,14 @@ async function runCtxAction(action){
     trackEvent("context_action", bortId, {action: "rename_bort"});
     apiPatch(`/api/borts/${bortId}`, {desc: v}, "описание обновлено");
     bort.desc = v; renderAll();
+    return;
+  }
+  if (action === "assign_bort"){
+    const v = prompt("Исполнитель (отдел или имя):", bort.assignee || "");
+    if (v === null) return;
+    trackEvent("context_action", bortId, {action: "assign_bort", assignee: v.trim()});
+    apiPatch(`/api/borts/${bortId}`, {assignee: v.trim()}, "исполнитель назначен");
+    bort.assignee = v.trim(); renderAll();
     return;
   }
   if (action === "add_subtask"){
@@ -1443,21 +1460,86 @@ document.getElementById("load-input").addEventListener("change", e=>{
 });
 
 document.getElementById("new-bort-btn").addEventListener("click", createNewBort);
+document.getElementById("templates-btn").addEventListener("click", manageTemplates);
+document.getElementById("seed-test-btn").addEventListener("click", seedTest);
 
-function createNewBort(){
-  const id = prompt("Идентификатор ремонта (например FPV-06):");
+async function seedTest(){
+  if (!confirm("Сгенерировать 5 тестовых бортов с исполнителями? Перезапишет одноимённые.")) return;
+  try {
+    const r = await fetch(API_BASE + "/api/seed-test", {method: "POST"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    setStatus("создано " + d.created + " тестовых бортов");
+    refetch();
+  } catch (err){
+    setStatus("ошибка: " + err.message);
+  }
+}
+
+async function manageTemplates(){
+  let list;
+  try {
+    const r = await fetch(API_BASE + "/api/templates");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    list = await r.json();
+  } catch(err){
+    alert("Не удалось загрузить шаблоны: " + err.message);
+    return;
+  }
+  if (list.length === 0){
+    alert("Шаблонов пока нет. Создайте через кнопку 'Создать' или POST /api/templates.");
+    return;
+  }
+  const choice = prompt(
+    "Шаблоны пайплайна:\n" +
+    list.map((t, i) => `${i+1}. ${t.id} — ${t.name} (${t.tracks_count} дорожек, ${t.segments_count} сегментов)`).join("\n") +
+    "\n\nВведите номер для просмотра/удаления, или 'new' для создания нового:"
+  );
+  if (!choice) return;
+  if (choice.trim() === "new"){
+    createTemplatePrompt();
+    return;
+  }
+  const idx = parseInt(choice.trim()) - 1;
+  if (idx < 0 || idx >= list.length){
+    alert("Неверный номер");
+    return;
+  }
+  const t = list[idx];
+  const action = prompt(`Шаблон ${t.id} (${t.name}).\nВведите 'view' для просмотра, 'del' для удаления:`);
+  if (action === "view"){
+    const r = await fetch(API_BASE + "/api/templates/" + t.id);
+    if (!r.ok){ alert("ошибка загрузки"); return; }
+    const full = await r.json();
+    alert(JSON.stringify(full, null, 2));
+  } else if (action === "del"){
+    if (!confirm("Удалить шаблон " + t.id + "?")) return;
+    await fetch(API_BASE + "/api/templates/" + t.id, {method: "DELETE"});
+    setStatus("шаблон удалён");
+    manageTemplates();
+  }
+}
+
+function createTemplatePrompt(){
+  const id = prompt("ID шаблона (например fpv-ptz):");
   if (!id || !id.trim()) return;
-  const cleanId = id.trim().toUpperCase();
-  if (DATA.some(b => b.id === cleanId)){ alert("Борт " + cleanId + " уже существует"); return; }
-  const desc = prompt("Описание (опционально):", "") || "";
-  trackEvent("bort_create_intent", cleanId, {desc});
-  fetch(API_BASE + "/api/borts", {
+  const name = prompt("Название шаблона:");
+  if (!name || !name.trim()) return;
+  const json = prompt(
+    "Вставьте JSON с треками:\n" +
+    '{"tracks":[{"name":"Главный","sub":false,"segments":[{"kind":"think","label":"Разбор","days":1},{"kind":"work","label":"Прошивка","days":3}]}]}'
+  );
+  if (!json) return;
+  let defn;
+  try { defn = JSON.parse(json); } catch(e){ alert("Невалидный JSON: " + e.message); return; }
+  if (!defn.tracks || !Array.isArray(defn.tracks)){ alert("Нет поля tracks (массив)"); return; }
+  fetch(API_BASE + "/api/templates", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({
-      id: cleanId,
-      desc: desc,
-      case_start: TODAY_INDEX,
+      id: id.trim(),
+      name: name.trim(),
+      tracks: defn.tracks,
       session_id: SESSION_ID,
     }),
   })
@@ -1466,11 +1548,85 @@ function createNewBort(){
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     })
-    .then(() => {
-      refetch();
-      setStatus("ремонт " + cleanId + " создан · " + dateLabel(TODAY_INDEX));
-    })
-    .catch(err => setStatus("ошибка создания: " + err.message));
+    .then(() => setStatus("шаблон создан"))
+    .catch(err => alert("ошибка: " + err.message));
+}
+
+async function createNewBort(){
+  const id = prompt("Идентификатор ремонта (например FPV-06):");
+  if (!id || !id.trim()) return;
+  const cleanId = id.trim().toUpperCase();
+  if (DATA.some(b => b.id === cleanId)){ alert("Борт " + cleanId + " уже существует"); return; }
+  const desc = prompt("Описание (опционально):", "") || "";
+  const assignee = prompt("Исполнитель (отдел или имя, опционально):", "") || "";
+
+  // Получить список шаблонов для выбора
+  let templateId = null;
+  try {
+    const r = await fetch(API_BASE + "/api/templates");
+    if (r.ok){
+      const templates = await r.json();
+      if (templates.length){
+        const choice = prompt(
+          "Шаблон пайплайна? (пусто — пустой борт)\n" +
+          templates.map((t, i) => `${i+1}. ${t.name} (${t.tracks_count} дорожек, ${t.segments_count} сегментов)`).join("\n"),
+          ""
+        );
+        if (choice && choice.trim()){
+          const idx = parseInt(choice.trim()) - 1;
+          if (idx >= 0 && idx < templates.length){
+            templateId = templates[idx].id;
+          } else {
+            // может быть ввели ID
+            const byId = templates.find(t => t.id === choice.trim());
+            if (byId) templateId = byId.id;
+          }
+        }
+      }
+    }
+  } catch(e){ /* молча — без шаблона */ }
+
+  trackEvent("bort_create_intent", cleanId, {desc, assignee, template_id: templateId});
+
+  // создаём борт
+  let ok = true;
+  try {
+    const r = await fetch(API_BASE + "/api/borts", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        id: cleanId,
+        desc: desc,
+        assignee: assignee,
+        case_start: TODAY_INDEX,
+        session_id: SESSION_ID,
+      }),
+    });
+    if (r.status === 409) throw new Error("уже существует");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+  } catch (err){
+    setStatus("ошибка создания: " + err.message);
+    ok = false;
+  }
+  if (!ok) return;
+
+  // применяем шаблон если выбран
+  if (templateId){
+    try {
+      await fetch(API_BASE + "/api/borts/" + cleanId + "/apply_template", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          template_id: templateId,
+          today_index: TODAY_INDEX,
+          session_id: SESSION_ID,
+        }),
+      });
+    } catch(e){ /* ignore */ }
+  }
+
+  refetch();
+  setStatus("ремонт " + cleanId + (templateId ? " создан · шаблон " + templateId : " создан") + " · " + dateLabel(TODAY_INDEX));
 }
 
 (async function init(){
