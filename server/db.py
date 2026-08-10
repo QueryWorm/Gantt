@@ -79,9 +79,30 @@ CREATE TABLE IF NOT EXISTS queue (
 CREATE TABLE IF NOT EXISTS templates (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
-    definition  TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_templates_created ON templates(created_at);
+
+CREATE TABLE IF NOT EXISTS template_tracks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    is_sub      INTEGER NOT NULL DEFAULT 0,
+    ord         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tpl_tracks_tpl ON template_tracks(template_id, ord);
+
+CREATE TABLE IF NOT EXISTS template_segments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id    INTEGER NOT NULL REFERENCES template_tracks(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    days        INTEGER NOT NULL DEFAULT 0,
+    dept        TEXT NOT NULL DEFAULT '',
+    assignee    TEXT NOT NULL DEFAULT '',
+    ord         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tpl_segs_track ON template_segments(track_id, ord);
 """
 
 
@@ -110,6 +131,42 @@ def init_db() -> None:
             conn.execute("ALTER TABLE segments ADD COLUMN dept TEXT NOT NULL DEFAULT ''")
         if "assignee" not in scols:
             conn.execute("ALTER TABLE segments ADD COLUMN assignee TEXT NOT NULL DEFAULT ''")
+        # миграция: шаблоны переехали с JSON на нормальные таблицы
+        # Если в templates ещё есть колонка definition — сбрасываем (старые шаблоны теряются)
+        # В активной разработке это безопасно; в продакшене нужна полноценная миграция
+        tcols = {r["name"] for r in conn.execute("PRAGMA table_info(templates)").fetchall()}
+        if "definition" in tcols:
+            conn.execute("DELETE FROM templates")
+            tlist = {r["name"] for r in conn.execute("PRAGMA table_info(template_tracks)").fetchall()}
+            if "is_sub" not in tlist:
+                conn.execute("DROP TABLE IF EXISTS template_segments")
+                conn.execute("DROP TABLE IF EXISTS template_tracks")
+                conn.execute("ALTER TABLE templates RENAME TO _tpl_old")
+                conn.executescript("""
+                    CREATE TABLE templates (
+                        id          TEXT PRIMARY KEY,
+                        name        TEXT NOT NULL,
+                        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    CREATE TABLE template_tracks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        is_sub INTEGER NOT NULL DEFAULT 0,
+                        ord INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE TABLE template_segments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        track_id INTEGER NOT NULL REFERENCES template_tracks(id) ON DELETE CASCADE,
+                        kind TEXT NOT NULL,
+                        label TEXT NOT NULL,
+                        days INTEGER NOT NULL DEFAULT 0,
+                        dept TEXT NOT NULL DEFAULT '',
+                        assignee TEXT NOT NULL DEFAULT '',
+                        ord INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                conn.execute("DROP TABLE _tpl_old")
         conn.commit()
 
 

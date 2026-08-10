@@ -574,7 +574,8 @@ function computeStats(bort){
   return {work, testCycles, hold, holdReason};
 }
 
-function renderCard(bort, idx, sharedAxisTotal){
+function renderCard(bort, idx, sharedAxisTotal, isTemplate=false){
+  const bortId = bort.id;
   const chartWidth = sharedAxisTotal * PX_PER_DAY;
   const todayLeft = TODAY_INDEX * PX_PER_DAY; // общий для всех — реальный календарный "сегодня"
   const ownFinish = axisTotalFor(bort) - 2;
@@ -656,7 +657,7 @@ function renderCard(bort, idx, sharedAxisTotal){
     <span>Холд: <span class="num">${stats.hold}д</span>${stats.holdReason ? ' · '+stats.holdReason : ''}</span>
   `;
 
-  const logHtml = bort.log.map(l=>`
+  const logHtml = (bort.log || []).map(l=>`
     <div class="log-entry">
       <div class="log-meta"><span>${l.date}</span><span class="stage">${l.stage}</span></div>
       <div class="log-text">${l.text}</div>
@@ -667,17 +668,29 @@ function renderCard(bort, idx, sharedAxisTotal){
     `<option value="${i}">${t.name}${i===0?' (главный)':''}</option>`
   ).join("");
 
+  const dayBadge = isTemplate
+    ? `<div class="day-badge">шаблон</div>`
+    : `<div class="day-badge">Д+<b>${TODAY_INDEX - bort.caseStart}</b> <span class="plan-note">/ план до ${dateLabel(ownFinish)}</span></div>`;
+
+  const cardClass = isTemplate ? "card is-template" : "card";
+  const dataAttrs = isTemplate ? `data-tpl-id="${bortId}"` : `data-bort-idx="${idx}"`;
+  const closeAttrs = isTemplate
+    ? `data-tpl-id="${bortId}" title="Удалить шаблон"`
+    : `data-idx="${idx}" title="Удалить ремонт (правый клик на сегмент → Борт → Удалить)"`;
+  const closeBtn = `<button class="card-close" ${closeAttrs}>✕</button>`;
+  const cardId = isTemplate ? bortId : bort.id;
+
   return `
-  <div class="card" data-bort-idx="${idx}">
-    <button class="card-close" data-idx="${idx}" title="Удалить ремонт (правый клик на сегмент → Борт → Удалить)">✕</button>
+  <div class="${cardClass}" ${dataAttrs}>
+    ${closeBtn}
     <div class="card-head">
       <div>
         <div class="bort-id">
-          <span>${bort.id}</span>
-          ${bort.desc ? `<span class="bort-desc-inline">${bort.desc}</span>` : ''}
+          <span>${isTemplate ? escapeHtml(bort.name) : bort.id}</span>
+          ${bort.desc ? `<span class="bort-desc-inline">${escapeHtml(bort.desc)}</span>` : ''}
         </div>
       </div>
-      <div class="day-badge">Д+<b>${TODAY_INDEX - bort.caseStart}</b> <span class="plan-note">/ план до ${dateLabel(ownFinish)}</span></div>
+      ${dayBadge}
     </div>
     <div class="gantt">
       <div class="gantt-labels">${labelsHtml}</div>
@@ -695,10 +708,25 @@ function renderCard(bort, idx, sharedAxisTotal){
     <div class="stats-row">
       <div>${statsHtml}</div>
       <div class="toggles">
-        <button class="edit-toggle" data-idx="${idx}">✎ править</button>
-        <button class="log-toggle" data-idx="${idx}">лог ремонта →</button>
+        ${isTemplate
+          ? `<button class="edit-toggle" data-idx="${idx}" data-tpl-id="${bort.id}">➕ подзадача</button>
+             <button class="log-toggle" data-idx="${idx}" data-tpl-id="${bort.id}">▶ применить</button>`
+          : `<button class="edit-toggle" data-idx="${idx}">✎ править</button>
+             <button class="log-toggle" data-idx="${idx}">лог ремонта →</button>`}
       </div>
     </div>
+    ${isTemplate ? `
+    <div class="edit-form" id="edit-${idx}">
+      <div class="edit-inner">
+        <div class="subtask-block">
+          <div class="subtask-label">+ новая дорожка</div>
+          <div class="subtask-row">
+            <input id="edit-subtask-${idx}" type="text" placeholder="Например: Калибровка">
+            <button class="subtask-add" data-idx="${idx}" data-tpl-id="${bort.id}">Добавить</button>
+          </div>
+        </div>
+      </div>
+    </div>` : `
     <div class="edit-form" id="edit-${idx}">
       <div class="edit-inner">
         <div class="edit-row">
@@ -717,7 +745,6 @@ function renderCard(bort, idx, sharedAxisTotal){
           <button class="edit-log" data-idx="${idx}">📝 Записать в лог</button>
           <button class="edit-save" data-idx="${idx}">Сменить статус</button>
         </div>
-
         <div class="subtask-block">
           <div class="subtask-label">+ новая параллельная подзадача</div>
           <div class="subtask-row">
@@ -727,7 +754,7 @@ function renderCard(bort, idx, sharedAxisTotal){
         </div>
       </div>
     </div>
-    <div class="log" id="log-${idx}">${logHtml}</div>
+    <div class="log" id="log-${idx}">${logHtml}</div>`}
   </div>`;
 }
 
@@ -743,7 +770,6 @@ async function renderAll(){
   buildRuler(0, sharedAxisTotal);
   document.getElementById("active-list").innerHTML = DATA.map((b,i)=>renderCard(b,i,sharedAxisTotal)).join("");
   document.getElementById("queue-list").innerHTML = QUEUE.map(renderQueue).join("");
-  // загрузить шаблоны и отрендерить
   await renderTemplatesSection();
   bindCardEvents();
   bindSyncedScroll();
@@ -766,110 +792,20 @@ async function renderTemplatesSection(){
       fetch(API_BASE + "/api/templates/" + t.id).then(r => r.ok ? r.json() : null).catch(() => null)
     ));
     const valid = full.filter(Boolean);
+    TEMPLATES = valid;
     // max день среди всех шаблонов
     const maxDays = Math.max(1, ...valid.flatMap(t => t.tracks.flatMap(tr => tr.segments.map(s => s.start + s.days))));
-    const PX = PX_PER_DAY;
-    const chartWidth = maxDays * PX + 40;
-    document.getElementById("templates-list").innerHTML = valid.map((tpl, ti) => renderTemplateCard(tpl, ti, chartWidth)).join("");
+    // render через renderCard с isTemplate=true
+    const tplAxisTotal = Math.max(maxDays, TODAY_INDEX) + 2;
+    document.getElementById("templates-list").innerHTML = valid.map((tpl, ti) => renderCard(tpl, 1000 + ti, tplAxisTotal, true)).join("");
   } catch(e){
     // молча
   }
 }
 
 function renderTemplateCard(tpl, idx, chartWidth){
-  const [mainTrack, ...subTracks] = tpl.tracks;
-  const ROW_H = 24, GAP = 5, MAIN_H = 24;
-  const rowY = (trackIdx) => trackIdx === 0 ? 0 : MAIN_H + GAP + (trackIdx - 1) * ROW_H;
-  const totalRows = tpl.tracks.length;
-  const svgHeight = totalRows === 1 ? MAIN_H : MAIN_H + GAP + (totalRows - 1) * ROW_H;
-
-  const labelsHtml = `<div class="track-name main">${escapeHtml(mainTrack ? mainTrack.name : "—")}</div>` +
-    (subTracks.length
-      ? `<div class="label-group">${subTracks.map(t => `<div class="track-name sub">${escapeHtml(t.name)}</div>`).join("")}</div>`
-      : "");
-
-  // пробежаться по трекам и сгенерить rowHtml
-  let rowsHtml = "";
-  tpl.tracks.forEach((t, ti) => {
-    const segHtml = t.segments.map((s, si) => {
-      const left = (s.start + 0) * PX_PER_DAY;
-      const width = Math.max(2, s.days * PX_PER_DAY);
-      const kindClass = s.kind;
-      const statusClass = "st-" + s.status;
-      const leftDays = (s.start + 0);
-      const tip = `${s.label} · ${s.days}д · ${dateLabel(s.start)} · ${s.dept || "—"} · ${s.assignee || "—"}`;
-      const text = width > 50 ? s.label : "";
-      return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip.replace(/"/g, '&quot;')}">${text}</div>`;
-    }).join("");
-    const roleClass = ti === 0 ? "main" : "sub";
-    rowsHtml += ti === 0
-      ? `<div class="track-row ${roleClass}">${segHtml}</div>`
-      : (ti === 1 ? `<div class="track-group">${renderTemplateTrackSub(tpl.tracks.slice(1), idx)}</div>` : "");
-  });
-
-  // для sub-trackов делаем одну обёртку
-  function renderTemplateTrackSub(subs, tIdx){
-    return subs.map((t, ti) => {
-      const segHtml = t.segments.map((s, si) => {
-        const left = (s.start + 0) * PX_PER_DAY;
-        const width = Math.max(2, s.days * PX_PER_DAY);
-        const kindClass = s.kind;
-        const statusClass = "st-" + s.status;
-        const tip = `${s.label} · ${s.days}д · ${dateLabel(s.start)} · ${s.dept || "—"} · ${s.assignee || "—"}`;
-        const text = width > 50 ? s.label : "";
-        return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip.replace(/"/g, '&quot;')}">${text}</div>`;
-      }).join("");
-      return `<div class="track-row sub">${segHtml}</div>`;
-    }).join("");
-  }
-
-  // сегменты в правильном порядке: main row, потом group с sub
-  let rows = "";
-  if (mainTrack){
-    rows += renderTemplateTrackRow(mainTrack, 0);
-  }
-  if (subTracks.length){
-    rows += `<div class="track-group">${subTracks.map((t, ti) => renderTemplateTrackRow(t, ti + 1)).join("")}</div>`;
-  }
-
-  const totalSegs = tpl.tracks.reduce((a, t) => a + t.segments.length, 0);
-
-  return `
-  <div class="card is-template" data-tpl-id="${escapeHtml(tpl.id)}">
-    <button class="card-apply" data-tpl-id="${escapeHtml(tpl.id)}" title="Применить шаблон к борту">▶ применить</button>
-    <button class="card-close" data-tpl-id="${escapeHtml(tpl.id)}" title="Удалить шаблон">✕</button>
-    <div class="card-head">
-      <div>
-        <div class="bort-id">
-          <span>${escapeHtml(tpl.name)}</span>
-          <span class="tpl-meta">${escapeHtml(tpl.id)} · ${tpl.tracks.length} дорожек · ${totalSegs} сегментов</span>
-        </div>
-      </div>
-      <div class="day-badge">шаблон</div>
-    </div>
-    <div class="gantt">
-      <div class="gantt-labels">${labelsHtml}</div>
-      <div class="gantt-chart-scroll">
-        <div class="gantt-chart-inner" style="width:${chartWidth}px;height:${svgHeight}px">
-          ${rows}
-        </div>
-      </div>
-    </div>
-  </div>`;
-}
-
-function renderTemplateTrackRow(t, trackIdx){
-  const segHtml = t.segments.map(s => {
-    const left = (s.start + 0) * PX_PER_DAY;
-    const width = Math.max(2, s.days * PX_PER_DAY);
-    const kindClass = s.kind;
-    const statusClass = "st-" + s.status;
-    const tip = `${s.label} · ${s.days}д · ${dateLabel(s.start)} · ${s.dept || "—"} · ${s.assignee || "—"}`;
-    const text = width > 50 ? s.label : "";
-    return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip.replace(/"/g, '&quot;')}">${text}</div>`;
-  }).join("");
-  const roleClass = trackIdx === 0 ? "main" : "sub";
-  return `<div class="track-row ${roleClass}">${segHtml}</div>`;
+  /* deprecated — renderCard now handles templates via isTemplate=true */
+  return '';
 }
 
 const tooltip = document.getElementById("tooltip");
@@ -888,13 +824,23 @@ function bindTooltips(){
     });
     seg.addEventListener("contextmenu", e=>{
       e.preventDefault();
-      const idx = Number(seg.dataset.bortIdx);
+      const card = seg.closest(".card");
       const trackIdx = Number(seg.dataset.trackIdx);
-      const bort = DATA[idx];
-      const track = bort.tracks[trackIdx];
       const segIdx = Number(seg.dataset.segIdx);
-      const segData = track.segments[segIdx];
-      showCtxMenu(e.clientX, e.clientY, bort, track, segData, idx, trackIdx, segIdx);
+      const tplId = card && card.dataset.tplId;
+      let bort, track, segData;
+      if (tplId){
+        bort = (TEMPLATES || []).find(t => String(t.id) === tplId);
+        if (!bort) return;
+        track = bort.tracks[trackIdx];
+        segData = track.segments[segIdx];
+      } else {
+        const idx = Number(seg.dataset.bortIdx);
+        bort = DATA[idx];
+        track = bort.tracks[trackIdx];
+        segData = track.segments[segIdx];
+      }
+      showCtxMenu(e.clientX, e.clientY, bort, track, segData, Number(seg.dataset.bortIdx), trackIdx, segIdx);
     });
   });
 }
@@ -915,7 +861,47 @@ const KIND_OPTIONS = [
 ];
 const STATUS_OPTIONS = [["active", "active"], ["done", "done"], ["planned", "planned"]];
 
+function renderTemplateCtxMenu(bort, track, seg){
+  const onlyOneTrack = bort.tracks.length === 1;
+  const onlyOneSeg = track.segments.length === 1;
+  return `
+    <div class="ctx-label">${escapeHtml(bort.id)} · ${escapeHtml(track.name)}</div>
+    <div class="ctx-item disabled"><span>Сегмент</span><span class="ctx-hint">${escapeHtml(seg.label)}</span></div>
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-label">Тип</div>
+    ${KIND_OPTIONS.map(([v, l]) =>
+      `<div class="ctx-item" data-action="set:kind:${v}">
+         <span>${l}</span>${v === seg.kind ? '<span class="ctx-hint">●</span>' : ''}
+       </div>`
+    ).join("")}
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-item" data-action="set_label"><span>Название: <span class="ctx-hint">${escapeHtml(seg.label)}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="dept_seg"><span>Отдел: <span class="ctx-hint">${seg.dept || '—'}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item" data-action="assign_seg"><span>Исполнитель: <span class="ctx-hint">${seg.assignee || '—'}</span></span><span class="ctx-hint">✎</span></div>
+    <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-label">Трек</div>
+    <div class="ctx-item" data-action="rename_track"><span>Переименовать трек</span></div>
+    ${onlyOneTrack ? "" : `<div class="ctx-item danger" data-action="del_track"><span>Удалить трек</span>` + (onlyOneSeg ? " <span class='ctx-hint'>(пуст)</span>" : "") + `</div>`}
+    <div class="ctx-sep"></div>
+
+    <div class="ctx-label">Шаблон</div>
+    <div class="ctx-item" data-action="rename_template"><span>Переименовать</span></div>
+    <div class="ctx-item" data-action="apply_template">Применить к борту</div>
+  `;
+}
+
+function isTemplateBort(bortId){
+  return (TEMPLATES || []).some(t => t.id === bortId);
+}
+
 function renderCtxMenu(bort, track, seg, idx, trackIdx){
+  const isTpl = (TEMPLATES || []).some(t => t.id === bort.id);
+  if (isTpl) return renderTemplateCtxMenu(bort, track, seg);
   const kindLabel = KIND_OPTIONS.find(k => k[0] === seg.kind)?.[1] || seg.kind;
   const onlyOneTrack = bort.tracks.length === 1;
   const onlyOneSeg = track.segments.length === 1;
@@ -1016,13 +1002,30 @@ async function runCtxAction(action){
   const segId = seg.id;
   const trackId = track.id;
   const bortId = bort.id;
+  const isTpl = isTemplateBort(bortId);
+
+  // URL хелперы для борт/шаблон
+  const segUrl = isTpl
+    ? `${API_BASE}/api/templates/${bortId}/tracks/${trackId}/segments/${segId}`
+    : `${API_BASE}/api/borts/${bortId}/segments/${segId}`;
+  const trackUrl = isTpl
+    ? `${API_BASE}/api/templates/${bortId}/tracks/${trackId}`
+    : `${API_BASE}/api/borts/${bortId}/tracks/${trackId}`;
 
   // set:kind:work / set:status:done
   if (action.startsWith("set:kind:") || action.startsWith("set:status:")){
     const [_, field, value] = action.split(":");
     const patch = field === "kind" ? {kind: value} : {status: value};
+    if (isTpl && field === "status") return; // шаблоны не имеют статуса
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action, field, value});
-    apiPatch(`/api/borts/${bortId}/segments/${segId}`, patch, "тип/статус обновлён");
+    fetch(segUrl, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({...patch, session_id: SESSION_ID}),
+    })
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("обновлено"); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     if (field === "kind"){ seg.kind = value; seg.label = KIND_OPTIONS.find(k => k[0] === value)[1]; }
     if (field === "status") seg.status = value;
     renderAll();
@@ -1035,12 +1038,14 @@ async function runCtxAction(action){
     const n = Number(v);
     if (!Number.isFinite(n) || n < 0){ alert("Должно быть числом ≥ 0"); return; }
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_days", days: n});
-    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {days: n}, "длительность обновлена");
-    seg.days = n; renderAll();
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({days: n, session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("длительность обновлена"); seg.days = n; renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "set_start"){
-    const v = prompt("Стартовый день (число от 0 или дата DD.MM):", dateLabel(seg.start));
+    const v = prompt("Стартовый день (число от 0 или дата DD.MM):", String(seg.start));
     if (v === null) return;
     let n;
     if (/^\d+(\.\d+)?$/.test(v.trim())){
@@ -1051,8 +1056,20 @@ async function runCtxAction(action){
     }
     if (!Number.isFinite(n) || n < 0){ alert("Должно быть ≥ 0"); return; }
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_start", start: n});
-    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {start: n}, "старт обновлён");
-    seg.start = n; renderAll();
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({start: n, session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("старт обновлён"); seg.start = n; renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
+    return;
+  }
+  if (action === "set_label"){
+    const v = prompt("Название сегмента:", seg.label);
+    if (v === null || !v.trim()) return;
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_label", label: v.trim()});
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({label: v.trim(), session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("название обновлено"); seg.label = v.trim(); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "set_deps"){
@@ -1060,20 +1077,19 @@ async function runCtxAction(action){
     const v = prompt("ID предшественников через запятую (ID видны в tooltip после #).\nПусто — без зависимостей.", cur);
     if (v === null) return;
     const ids = v.split(",").map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0);
-    // валидация: ID должны существовать в этом борте
     const validIds = [];
     for (const tid of ids){
       const found = bort.tracks.some(t => t.segments.some(s => s.id === tid));
       if (found) validIds.push(tid);
     }
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_deps", deps: validIds});
-    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {depends_on: validIds}, "зависимости обновлены");
-    seg.depends_on = validIds;
-    renderAll();
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({depends_on: validIds, session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("зависимости обновлены"); seg.depends_on = validIds; renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "pick_dep_target"){
-    // запустить режим перетаскивания зависимости
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "pick_dep_target"});
     enterDepPickMode(bortId, segId);
     return;
@@ -1081,9 +1097,7 @@ async function runCtxAction(action){
   if (action === "activate_seg"){
     if (seg.status !== "planned") return;
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "activate_seg"});
-    fetch(API_BASE + "/api/borts/" + bortId + "/segments/" + segId + "/activate?session_id=" + encodeURIComponent(SESSION_ID), {
-      method: "POST",
-    })
+    fetch(API_BASE + "/api/borts/" + bortId + "/segments/" + segId + "/activate?session_id=" + encodeURIComponent(SESSION_ID), {method: "POST"})
       .then(r => {
         if (r.status === 409) throw new Error("блокировано — не все зависимости закрыты");
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -1097,63 +1111,100 @@ async function runCtxAction(action){
     const v = prompt("Отдел для задачи (механика, видео, телеметрия, электроника...):", seg.dept || "");
     if (v === null) return;
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "dept_seg", dept: v.trim()});
-    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {dept: v.trim()}, "отдел задачи обновлён");
-    seg.dept = v.trim(); renderAll();
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({dept: v.trim(), session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("отдел обновлён"); seg.dept = v.trim(); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "assign_seg"){
     const v = prompt("Исполнитель задачи (имя, опционально):", seg.assignee || "");
     if (v === null) return;
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "assign_seg", assignee: v.trim()});
-    apiPatch(`/api/borts/${bortId}/segments/${segId}`, {assignee: v.trim()}, "исполнитель задачи обновлён");
-    seg.assignee = v.trim(); renderAll();
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({assignee: v.trim(), session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("исполнитель обновлён"); seg.assignee = v.trim(); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "del_seg"){
     if (!confirm(`Удалить сегмент «${seg.label}»?`)) return;
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "del_seg"});
-    apiDelete(`/api/borts/${bortId}/segments/${segId}`, "сегмент удалён");
-    track.segments.splice(segIdx, 1);
-    renderAll();
+    fetch(segUrl + "?session_id=" + encodeURIComponent(SESSION_ID), {method: "DELETE"})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("сегмент удалён"); track.segments.splice(segIdx, 1); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
+    return;
+  }
+  if (action === "rename_template"){
+    const tpl = TEMPLATES.find(t => t.id === bortId);
+    const v = prompt("Новое название шаблона:", (tpl && tpl.name) || bortId);
+    if (v === null || !v.trim()) return;
+    trackEvent("context_action", bortId, {action: "rename_template"});
+    fetch(API_BASE + "/api/templates/" + bortId, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: v.trim(), session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("шаблон переименован"); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
+    return;
+  }
+  if (action === "apply_template"){
+    applyTemplateToBort(bortId);
     return;
   }
   if (action === "rename_track"){
     const v = prompt("Новое имя трека:", track.name);
     if (v === null || !v.trim()) return;
     trackEvent("context_action", `${bortId}/track/${trackId}`, {action: "rename_track", new_name: v.trim()});
-    apiPatch(`/api/borts/${bortId}/tracks/${trackId}`, {name: v.trim()}, "трек переименован");
-    track.name = v.trim(); renderAll();
+    fetch(trackUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: v.trim(), session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("трек переименован"); track.name = v.trim(); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "del_track"){
     if (!confirm(`Удалить трек «${track.name}» вместе со всеми сегментами?`)) return;
     trackEvent("context_action", `${bortId}/track/${trackId}`, {action: "del_track"});
-    apiDelete(`/api/borts/${bortId}/tracks/${trackId}`, "трек удалён");
-    bort.tracks.splice(trackIdx, 1);
-    renderAll();
+    fetch(trackUrl + "?session_id=" + encodeURIComponent(SESSION_ID), {method: "DELETE"})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("трек удалён"); bort.tracks.splice(trackIdx, 1); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "rename_bort"){
+    if (isTpl) return;
     const v = prompt("Новое описание борта:", bort.desc);
     if (v === null) return;
     trackEvent("context_action", bortId, {action: "rename_bort"});
-    apiPatch(`/api/borts/${bortId}`, {desc: v}, "описание обновлено");
-    bort.desc = v; renderAll();
+    fetch(API_BASE + "/api/borts/" + bortId, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({desc: v, session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("описание обновлено"); bort.desc = v; renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "add_subtask"){
-    const v = prompt("Имя новой подзадачи:");
+    const v = prompt("Имя новой " + (isTpl ? "дорожки" : "подзадачи") + ":");
     if (!v || !v.trim()) return;
-    trackEvent("context_action", bortId, {action: "add_subtask", name: v.trim()});
-    pushSubtask(bortId, {name: v.trim(), today_index: TODAY_INDEX, session_id: SESSION_ID});
+    trackEvent("context_action", bortId, {action: isTpl ? "add_track" : "add_subtask", name: v.trim()});
+    const url = isTpl
+      ? API_BASE + "/api/templates/" + bortId + "/tracks"
+      : API_BASE + "/api/borts/" + bortId + "/subtasks";
+    const body = isTpl
+      ? {name: v.trim(), sub: true, session_id: SESSION_ID}
+      : {name: v.trim(), today_index: TODAY_INDEX, session_id: SESSION_ID};
+    fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("добавлено"); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "del_bort"){
+    if (isTpl) return;
     if (!confirm(`Удалить борт ${bort.id} и все его треки?`)) return;
     trackEvent("context_action", bortId, {action: "del_bort"});
-    apiDelete(`/api/borts/${bortId}`, "борт удалён");
-    DATA.splice(idx, 1);
-    renderAll();
+    fetch(API_BASE + "/api/borts/" + bortId + "?session_id=" + encodeURIComponent(SESSION_ID), {method: "DELETE"})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("борт удалён"); DATA.splice(idx, 1); renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
 }
@@ -1265,6 +1316,10 @@ function bindCardEvents(){
   });
   document.querySelectorAll(".log-toggle").forEach(btn=>{
     btn.onclick = ()=>{
+      if (btn.dataset.tplId){
+        applyTemplateToBort(btn.dataset.tplId);
+        return;
+      }
       const log = document.getElementById("log-"+btn.dataset.idx);
       const open = log.classList.toggle("open");
       btn.textContent = open ? "лог ремонта ↓" : "лог ремонта →";
@@ -1275,6 +1330,11 @@ function bindCardEvents(){
     btn.onclick = ()=>{
       const panel = document.getElementById("edit-"+btn.dataset.idx);
       const open = panel.classList.toggle("open");
+      if (btn.dataset.tplId){
+        btn.textContent = open ? "✕ скрыть" : "➕ подзадача";
+        trackEvent("toggle_edit", btn.dataset.tplId, {open});
+        return;
+      }
       trackEvent("toggle_edit", DATA[btn.dataset.idx].id, {open});
     };
   });
@@ -1347,10 +1407,28 @@ function bindCardEvents(){
   document.querySelectorAll(".subtask-add").forEach(btn=>{
     btn.onclick = ()=>{
       const idx = btn.dataset.idx;
-      const bort = DATA[idx];
       const input = document.getElementById("edit-subtask-"+idx);
       const name = input.value.trim();
       if(!name) return;
+      if (btn.dataset.tplId){
+        const tplId = btn.dataset.tplId;
+        trackEvent("template_track_add", tplId, {name});
+        fetch(API_BASE + "/api/templates/" + tplId + "/tracks", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({name, sub: true, session_id: SESSION_ID}),
+        })
+          .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then(() => {
+            setStatus("дорожка добавлена");
+            input.value = "";
+            document.getElementById("edit-"+idx).classList.add("open");
+            renderAll();
+          })
+          .catch(err => setStatus("ошибка: " + err.message));
+        return;
+      }
+      const bort = DATA[idx];
       bort.tracks.push({
         name, sub:true,
         segments:[{kind:"work", label:"Работа", start:TODAY_INDEX, days:0, status:"active"}]

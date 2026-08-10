@@ -19,6 +19,9 @@ from .schemas import (
     BortCreateRequest, LogEntryRequest,
     TemplateRequest, TemplateApplyRequest, TemplateSummary, Template,
     TemplateTrack, TemplateSegment,
+    TemplateTrackRequest, TemplateTrackPatchRequest,
+    TemplateSegmentRequest, TemplateSegmentPatchRequest,
+    TemplatePatchRequest,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -585,24 +588,60 @@ def events_stats(n: int = Query(20, ge=1, le=500)):
 
 # ---- Шаблоны пайплайна ----
 
+def _load_template_full(conn, template_id: str) -> dict | None:
+    """Загружает шаблон из нормализованных таблиц."""
+    tpl = conn.execute("SELECT id, name FROM templates WHERE id = ?", (template_id,)).fetchone()
+    if not tpl:
+        return None
+    tracks = conn.execute(
+        "SELECT * FROM template_tracks WHERE template_id = ? ORDER BY ord, id",
+        (template_id,),
+    ).fetchall()
+    out_tracks = []
+    for t in tracks:
+        segs = conn.execute(
+            "SELECT * FROM template_segments WHERE track_id = ? ORDER BY ord, id",
+            (t["id"],),
+        ).fetchall()
+        track_cursor = 0
+        out_segments = []
+        for s in segs:
+            out_segments.append({
+                "id": s["id"],
+                "kind": s["kind"],
+                "label": s["label"],
+                "start": track_cursor,
+                "days": s["days"],
+                "status": "planned",
+                "dept": s["dept"] or "",
+                "assignee": s["assignee"] or "",
+            })
+            track_cursor += max(0, s["days"])
+        out_tracks.append({
+            "id": t["id"],
+            "name": t["name"],
+            "sub": bool(t["is_sub"]),
+            "segments": out_segments,
+        })
+    return {"id": tpl["id"], "name": tpl["name"], "tracks": out_tracks}
 
-# ---- Шаблоны пайплайна ----
 
 @app.get("/api/templates", response_model=list[TemplateSummary])
 def list_templates():
     with get_conn() as conn:
-        rows = conn.execute("SELECT id, name, definition FROM templates ORDER BY created_at").fetchall()
+        rows = conn.execute("SELECT id, name FROM templates ORDER BY created_at").fetchall()
         result = []
         for r in rows:
-            try:
-                defn = _json.loads(r["definition"])
-            except _json.JSONDecodeError:
-                defn = {"tracks": []}
-            tracks = defn.get("tracks", [])
-            n_segs = sum(len(t.get("segments", [])) for t in tracks)
+            tracks_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM template_tracks WHERE template_id = ?", (r["id"],),
+            ).fetchone()["c"]
+            segs_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM template_segments s JOIN template_tracks t ON s.track_id = t.id WHERE t.template_id = ?",
+                (r["id"],),
+            ).fetchone()["c"]
             result.append(TemplateSummary(
                 id=r["id"], name=r["name"],
-                tracks_count=len(tracks), segments_count=n_segs,
+                tracks_count=tracks_count, segments_count=segs_count,
             ))
         return result
 
@@ -610,14 +649,10 @@ def list_templates():
 @app.get("/api/templates/{template_id}", response_model=Template)
 def get_template(template_id: str):
     with get_conn() as conn:
-        r = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
-        if not r:
+        full = _load_template_full(conn, template_id)
+        if not full:
             raise HTTPException(404, f"template {template_id} not found")
-        try:
-            defn = _json.loads(r["definition"])
-        except _json.JSONDecodeError:
-            defn = {"tracks": []}
-        return Template(id=r["id"], name=r["name"], tracks=defn.get("tracks", []))
+        return Template(id=full["id"], name=full["name"], tracks=full["tracks"])
 
 
 @app.post("/api/templates")
@@ -627,19 +662,19 @@ def create_template(req: TemplateRequest):
         raise HTTPException(400, "id is required")
     if not req.name.strip():
         raise HTTPException(400, "name is required")
-    if not req.tracks:
-        raise HTTPException(400, "at least one track required")
-    definition = {"tracks": [t.model_dump() for t in req.tracks]}
     with get_conn() as conn:
         if conn.execute("SELECT 1 FROM templates WHERE id = ?", (tid,)).fetchone():
             raise HTTPException(409, f"template {tid} already exists")
         conn.execute(
-            "INSERT INTO templates (id, name, definition) VALUES (?, ?, ?)",
-            (tid, req.name.strip(), _json.dumps(definition, ensure_ascii=False)),
+            "INSERT INTO templates (id, name) VALUES (?, ?)",
+            (tid, req.name.strip()),
         )
-        _write_event(conn, req.session_id, "template_create", tid, {
-            "name": req.name, "tracks_count": len(req.tracks),
-        })
+        # дефолтный главный трек с одним пустым сегментом
+        conn.execute(
+            "INSERT INTO template_tracks (template_id, name, is_sub, ord) VALUES (?, ?, 0, 0)",
+            (tid, "Главный"),
+        )
+        _write_event(conn, req.session_id, "template_create", tid, {"name": req.name})
         conn.commit()
     return {"ok": True, "id": tid}
 
@@ -656,22 +691,164 @@ def delete_template(template_id: str, session_id: str = ""):
     return {"ok": True}
 
 
+@app.patch("/api/templates/{template_id}")
+def patch_template(template_id: str, req: TemplatePatchRequest):
+    with get_conn() as conn:
+        r = conn.execute("SELECT id, name FROM templates WHERE id = ?", (template_id,)).fetchone()
+        if not r:
+            raise HTTPException(404, f"template {template_id} not found")
+        if req.name is not None:
+            conn.execute("UPDATE templates SET name = ? WHERE id = ?", (req.name, template_id))
+        _write_event(conn, req.session_id, "template_patch", template_id, {"new_name": req.name})
+        conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/templates/{template_id}/tracks")
+def add_template_track(template_id: str, req: TemplateTrackRequest):
+    if not req.name.strip():
+        raise HTTPException(400, "name is required")
+    with get_conn() as conn:
+        if not conn.execute("SELECT 1 FROM templates WHERE id = ?", (template_id,)).fetchone():
+            raise HTTPException(404, f"template {template_id} not found")
+        max_ord = conn.execute(
+            "SELECT COALESCE(MAX(ord), -1) FROM template_tracks WHERE template_id = ?", (template_id,),
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO template_tracks (template_id, name, is_sub, ord) VALUES (?, ?, ?, ?)",
+            (template_id, req.name.strip(), int(req.sub), max_ord + 1),
+        )
+        track_id = cur.lastrowid
+        _write_event(conn, req.session_id, "template_track_add", template_id, {
+            "track_id": track_id, "name": req.name, "sub": req.sub,
+        })
+        conn.commit()
+    return {"ok": True, "track_id": track_id}
+
+
+@app.patch("/api/templates/{template_id}/tracks/{track_id}")
+def patch_template_track(template_id: str, track_id: int, req: TemplateTrackPatchRequest):
+    if not req.name.strip():
+        raise HTTPException(400, "name is required")
+    with get_conn() as conn:
+        t = conn.execute(
+            "SELECT * FROM template_tracks WHERE id = ? AND template_id = ?",
+            (track_id, template_id),
+        ).fetchone()
+        if not t:
+            raise HTTPException(404, f"track {track_id} not in template {template_id}")
+        conn.execute("UPDATE template_tracks SET name = ? WHERE id = ?", (req.name, track_id))
+        _write_event(conn, req.session_id, "template_track_patch", template_id, {
+            "track_id": track_id, "old_name": t["name"], "new_name": req.name,
+        })
+        conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/templates/{template_id}/tracks/{track_id}")
+def delete_template_track(template_id: str, track_id: int, session_id: str = ""):
+    with get_conn() as conn:
+        t = conn.execute(
+            "SELECT * FROM template_tracks WHERE id = ? AND template_id = ?",
+            (track_id, template_id),
+        ).fetchone()
+        if not t:
+            raise HTTPException(404, f"track {track_id} not in template {template_id}")
+        seg_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM template_segments WHERE track_id = ?", (track_id,),
+        ).fetchone()["c"]
+        conn.execute("DELETE FROM template_tracks WHERE id = ?", (track_id,))
+        _write_event(conn, session_id, "template_track_delete", template_id, {
+            "track_id": track_id, "name": t["name"], "segments_deleted": seg_count,
+        })
+        conn.commit()
+    return {"ok": True, "segments_deleted": seg_count}
+
+
+@app.post("/api/templates/{template_id}/tracks/{track_id}/segments")
+def add_template_segment(template_id: str, track_id: int, req: TemplateSegmentRequest):
+    if not req.label.strip():
+        raise HTTPException(400, "label is required")
+    with get_conn() as conn:
+        t = conn.execute(
+            "SELECT * FROM template_tracks WHERE id = ? AND template_id = ?",
+            (track_id, template_id),
+        ).fetchone()
+        if not t:
+            raise HTTPException(404, f"track {track_id} not in template {template_id}")
+        max_ord = conn.execute(
+            "SELECT COALESCE(MAX(ord), -1) FROM template_segments WHERE track_id = ?", (track_id,),
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO template_segments (track_id, kind, label, days, dept, assignee, ord) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (track_id, req.kind, req.label, max(0, req.days), req.dept, req.assignee, max_ord + 1),
+        )
+        seg_id = cur.lastrowid
+        _write_event(conn, req.session_id, "template_segment_add", template_id, {
+            "track_id": track_id, "seg_id": seg_id, "kind": req.kind, "label": req.label,
+        })
+        conn.commit()
+    return {"ok": True, "seg_id": seg_id}
+
+
+@app.patch("/api/templates/{template_id}/tracks/{track_id}/segments/{seg_id}")
+def patch_template_segment(template_id: str, track_id: int, seg_id: int, req: TemplateSegmentPatchRequest):
+    with get_conn() as conn:
+        s = conn.execute(
+            "SELECT s.* FROM template_segments s JOIN template_tracks t ON s.track_id = t.id "
+            "WHERE s.id = ? AND t.id = ? AND t.template_id = ?",
+            (seg_id, track_id, template_id),
+        ).fetchone()
+        if not s:
+            raise HTTPException(404, f"segment {seg_id} not found")
+        updates, params, changes = [], [], {}
+        if req.kind is not None:
+            updates.append("kind = ?"); params.append(req.kind); changes["kind"] = req.kind
+        if req.label is not None:
+            updates.append("label = ?"); params.append(req.label); changes["label"] = req.label
+        if req.days is not None:
+            updates.append("days = ?"); params.append(max(0, req.days)); changes["days"] = req.days
+        if req.dept is not None:
+            updates.append("dept = ?"); params.append(req.dept); changes["dept"] = req.dept
+        if req.assignee is not None:
+            updates.append("assignee = ?"); params.append(req.assignee); changes["assignee"] = req.assignee
+        if not updates:
+            raise HTTPException(400, "nothing to update")
+        params.append(seg_id)
+        conn.execute(f"UPDATE template_segments SET {', '.join(updates)} WHERE id = ?", params)
+        _write_event(conn, req.session_id, "template_segment_patch", template_id, changes)
+        conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/templates/{template_id}/tracks/{track_id}/segments/{seg_id}")
+def delete_template_segment(template_id: str, track_id: int, seg_id: int, session_id: str = ""):
+    with get_conn() as conn:
+        s = conn.execute(
+            "SELECT s.* FROM template_segments s JOIN template_tracks t ON s.track_id = t.id "
+            "WHERE s.id = ? AND t.id = ? AND t.template_id = ?",
+            (seg_id, track_id, template_id),
+        ).fetchone()
+        if not s:
+            raise HTTPException(404, f"segment {seg_id} not found")
+        conn.execute("DELETE FROM template_segments WHERE id = ?", (seg_id,))
+        _write_event(conn, session_id, "template_segment_delete", template_id, {
+            "seg_id": seg_id, "kind": s["kind"], "label": s["label"],
+        })
+        conn.commit()
+    return {"ok": True}
+
+
 @app.post("/api/borts/{bort_id}/apply_template")
 def apply_template(bort_id: str, req: TemplateApplyRequest):
     """Применяет шаблон к борту: добавляет tracks и segments.
-    Если у борта уже есть треки — добавляет к ним. Сегменты из шаблона
-    становятся planned, начиная с req.today_index."""
+    Сегменты становятся planned, начиная с req.today_index."""
     with get_conn() as conn:
-        tpl = conn.execute("SELECT * FROM templates WHERE id = ?", (req.template_id,)).fetchone()
-        if not tpl:
+        if not conn.execute("SELECT 1 FROM templates WHERE id = ?", (req.template_id,)).fetchone():
             raise HTTPException(404, f"template {req.template_id} not found")
         if not conn.execute("SELECT 1 FROM borts WHERE id = ?", (bort_id,)).fetchone():
             raise HTTPException(404, f"bort {bort_id} not found")
-
-        try:
-            defn = _json.loads(tpl["definition"])
-        except _json.JSONDecodeError:
-            raise HTTPException(500, "template definition is corrupt")
 
         tracks_added = 0
         segs_added = 0
@@ -679,23 +856,31 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
             "SELECT COALESCE(MAX(ord), -1) FROM tracks WHERE bort_id = ?", (bort_id,),
         ).fetchone()[0]
         cursor = req.today_index
-        for t in defn.get("tracks", []):
+        tracks = conn.execute(
+            "SELECT * FROM template_tracks WHERE template_id = ? ORDER BY ord, id",
+            (req.template_id,),
+        ).fetchall()
+        for t in tracks:
             max_track_ord += 1
             cur = conn.execute(
                 "INSERT INTO tracks (bort_id, name, is_sub, ord) VALUES (?, ?, ?, ?)",
-                (bort_id, t["name"], int(t.get("sub", False)), max_track_ord),
+                (bort_id, t["name"], int(t["is_sub"]), max_track_ord),
             )
             track_id = cur.lastrowid
             tracks_added += 1
             track_cursor = cursor
-            for s_idx, s in enumerate(t.get("segments", [])):
+            segs = conn.execute(
+                "SELECT * FROM template_segments WHERE track_id = ? ORDER BY ord, id",
+                (t["id"],),
+            ).fetchall()
+            for s_idx, s in enumerate(segs):
                 start = track_cursor
-                days = max(0, int(s.get("days", 0)))
+                days = max(0, int(s["days"]))
                 conn.execute(
                     "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
                     "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?)",
-                    (track_id, s["kind"], s.get("label", s["kind"]), start, days, s_idx,
-                     s.get("dept", ""), s.get("assignee", "")),
+                    (track_id, s["kind"], s["label"], start, days, s_idx,
+                     s["dept"] or "", s["assignee"] or ""),
                 )
                 segs_added += 1
                 track_cursor += days

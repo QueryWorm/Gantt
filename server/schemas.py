@@ -79,6 +79,7 @@ class LogEntryRequest(BaseModel):
 
 
 class TemplateTrack(BaseModel):
+    id: Optional[int] = None
     name: str
     sub: bool = False
     segments: list["TemplateSegment"] = Field(default_factory=list)
@@ -90,13 +91,14 @@ class TemplateSegment(BaseModel):
     days: int = 0
     dept: str = ""
     assignee: str = ""
+    start: int = 0
+    status: str = "planned"
 
 
 class TemplateRequest(BaseModel):
     """POST /api/templates — создать шаблон."""
     id: str
     name: str
-    tracks: list[TemplateTrack]
     session_id: str = ""
 
 
@@ -104,6 +106,45 @@ class TemplateApplyRequest(BaseModel):
     """POST /api/borts/{id}/apply_template — применить шаблон к борту."""
     template_id: str
     today_index: int = 0
+    session_id: str = ""
+
+
+class TemplatePatchRequest(BaseModel):
+    """PATCH /api/templates/{id} — переименовать."""
+    name: Optional[str] = None
+    session_id: str = ""
+
+
+class TemplateTrackRequest(BaseModel):
+    """POST /api/templates/{id}/tracks — добавить трек."""
+    name: str
+    sub: bool = False
+    session_id: str = ""
+
+
+class TemplateTrackPatchRequest(BaseModel):
+    """PATCH /api/templates/{id}/tracks/{tid} — переименовать."""
+    name: str
+    session_id: str = ""
+
+
+class TemplateSegmentRequest(BaseModel):
+    """POST /api/templates/{id}/tracks/{tid}/segments — добавить сегмент."""
+    kind: str
+    label: str
+    days: int = 0
+    dept: str = ""
+    assignee: str = ""
+    session_id: str = ""
+
+
+class TemplateSegmentPatchRequest(BaseModel):
+    """PATCH /api/templates/{id}/tracks/{tid}/segments/{sid} — изменить сегмент."""
+    kind: Optional[str] = None
+    label: Optional[str] = None
+    days: Optional[int] = None
+    dept: Optional[str] = None
+    assignee: Optional[str] = None
     session_id: str = ""
 
 
