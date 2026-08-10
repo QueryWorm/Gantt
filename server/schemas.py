@@ -137,6 +137,7 @@ class TemplateSegmentRequest(BaseModel):
     days: int = 0
     dept: str = ""
     assignee: str = ""
+    start: int = -1
     session_id: str = ""
 
 
@@ -148,6 +149,7 @@ class TemplateSegmentPatchRequest(BaseModel):
     dept: Optional[str] = None
     assignee: Optional[str] = None
     depends_on: Optional[list[int]] = None
+    start: Optional[int] = None
     session_id: str = ""
 
 
@@ -168,12 +170,22 @@ class SegmentPatchRequest(BaseModel):
     depends_on: Optional[list[int]] = None
     dept: Optional[str] = None
     assignee: Optional[str] = None
+    today_index: int = 0
     session_id: str = ""
 
 
 class TrackPatchRequest(BaseModel):
     """PATCH /api/borts/{id}/tracks/{tid} — переименовать."""
     name: str
+    session_id: str = ""
+
+
+class TrackSegmentRequest(BaseModel):
+    """POST /api/borts/{id}/tracks/{tid}/segments — добавить сегмент в трек борта."""
+    kind: str = "work"
+    label: str
+    days: int = 0
+    today_index: int = 0
     session_id: str = ""
 
 

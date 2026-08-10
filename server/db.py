@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS template_segments (
     dept        TEXT NOT NULL DEFAULT '',
     assignee    TEXT NOT NULL DEFAULT '',
     depends_on  TEXT NOT NULL DEFAULT '[]',
+    start       INTEGER NOT NULL DEFAULT -1,
     ord         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tpl_segs_track ON template_segments(track_id, ord);
@@ -165,6 +166,7 @@ def init_db() -> None:
                         dept TEXT NOT NULL DEFAULT '',
                         assignee TEXT NOT NULL DEFAULT '',
                         depends_on TEXT NOT NULL DEFAULT '[]',
+                        start INTEGER NOT NULL DEFAULT -1,
                         ord INTEGER NOT NULL DEFAULT 0
                     );
                 """)
@@ -173,6 +175,8 @@ def init_db() -> None:
         tscols = {r["name"] for r in conn.execute("PRAGMA table_info(template_segments)").fetchall()}
         if "depends_on" not in tscols:
             conn.execute("ALTER TABLE template_segments ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
+        if "start" not in tscols:
+            conn.execute("ALTER TABLE template_segments ADD COLUMN start INTEGER NOT NULL DEFAULT -1")
         conn.commit()
 
 

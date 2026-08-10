@@ -16,7 +16,7 @@ from .schemas import (
     Snapshot, Bort, Track, Segment, LogEntry, QueueItem,
     MutateRequest, SubtaskRequest, EventRequest, EventStats,
     SegmentPatchRequest, TrackPatchRequest, BortPatchRequest,
-    BortCreateRequest, LogEntryRequest,
+    BortCreateRequest, LogEntryRequest, TrackSegmentRequest,
     TemplateRequest, TemplateApplyRequest, TemplateSummary, Template,
     TemplateTrack, TemplateSegment,
     TemplateTrackRequest, TemplateTrackPatchRequest,
@@ -137,6 +137,108 @@ def get_borts():
     return _load_snapshot()
 
 
+def _propagate_segment_starts(conn, bort_id: str, today_index: int = 0):
+    """Пересчитывает start сегментов с depends_on.
+
+    Правило: start = max(естественное место в треке, конец предшественников).
+    Естественное место — сразу после предыдущего сегмента того же трека (или
+    текущий start, если сегмент первый в треке). Сегменты без depends_on не трогает.
+
+    Это позволяет не только сдвигать ВПЕРЁД, когда предшественник удлинился,
+    но и возвращать назад, когда зависимость снята или предшественник укоротился."""
+    segs = conn.execute(
+        "SELECT s.* FROM segments s JOIN tracks t ON s.track_id = t.id "
+        "WHERE t.bort_id = ? ORDER BY s.track_id, s.ord, s.id",
+        (bort_id,),
+    ).fetchall()
+    seg_map = {r["id"]: dict(r) for r in segs}
+    if not seg_map:
+        return 0
+
+    by_track: dict[int, list[dict]] = {}
+    for r in segs:
+        by_track.setdefault(r["track_id"], []).append(dict(r))
+
+    def end_of(s: dict) -> int:
+        days = max(0, s["days"])
+        if s["status"] == "active":
+            return max(s["start"] + days, today_index)
+        return s["start"] + days
+
+    shifted = 0
+    for _round in range(100):
+        any_change = False
+        for _tid, track_segs in by_track.items():
+            prev_end = None
+            for s in track_segs:
+                if prev_end is None:
+                    natural = s["start"]
+                else:
+                    natural = prev_end
+                try:
+                    deps = _json.loads(s["depends_on"]) if s["depends_on"] else []
+                except (_json.JSONDecodeError, KeyError):
+                    deps = []
+                if deps:
+                    max_end = 0
+                    for d in deps:
+                        pred = seg_map.get(d)
+                        if pred:
+                            max_end = max(max_end, end_of(pred))
+                    new_start = max(natural, max_end)
+                    if new_start != s["start"]:
+                        conn.execute("UPDATE segments SET start = ? WHERE id = ?", (new_start, s["id"]))
+                        s["start"] = new_start
+                        shifted += 1
+                        any_change = True
+                prev_end = end_of(s)
+        if not any_change:
+            break
+    return shifted
+
+
+def _natural_start_in_track(conn, track_id: int, seg_id: int, today_index: int) -> int | None:
+    """Естественный start сегмента в его треке: конец предыдущего сегмента по ord.
+    None — если сегмент первый в треке (естественное место не определено)."""
+    prev = conn.execute(
+        "SELECT start, days, status FROM segments "
+        "WHERE track_id = ? AND id != ? AND (ord < (SELECT ord FROM segments WHERE id = ?) "
+        " OR (ord = (SELECT ord FROM segments WHERE id = ?) AND id < ?)) "
+        "ORDER BY ord, id DESC LIMIT 1",
+        (track_id, seg_id, seg_id, seg_id, seg_id),
+    ).fetchone()
+    if not prev:
+        return None
+    days = max(0, prev["days"])
+    if prev["status"] == "active":
+        return max(prev["start"] + days, today_index)
+    return prev["start"] + days
+
+
+def _shift_template_starts(out_segments: list[dict]) -> None:
+    """Для шаблонов: сдвигает синтезированные start по depends_on (все planned)."""
+    by_id = {s["id"]: s for s in out_segments}
+    rounds = 0
+    while rounds < 100:
+        any_change = False
+        for s in out_segments:
+            deps = s.get("depends_on") or []
+            if not deps:
+                continue
+            max_end = 0
+            for d in deps:
+                pred = by_id.get(d)
+                if pred:
+                    max_end = max(max_end, pred["start"] + max(0, pred["days"]))
+            new_start = max(s["start"], max_end)
+            if new_start != s["start"]:
+                s["start"] = new_start
+                any_change = True
+        if not any_change:
+            break
+        rounds += 1
+
+
 @app.post("/api/borts/{bort_id}/mutate")
 def mutate_bort(bort_id: str, req: MutateRequest):
     """Закрыть активный сегмент на треке, открыть новый с today_index.
@@ -208,17 +310,6 @@ def mutate_bort(bort_id: str, req: MutateRequest):
         )
 
         # каскадный сдвиг downstream planned по dependencies
-        shifted = []
-        if active is not None:
-            delta = elapsed - active["days"]
-            if delta > 0:
-                shifted = _cascade_shift_downstream(conn, active["id"], delta, set())
-                if shifted:
-                    _write_event(conn, req.session_id, "cascade_shift", bort_id, {
-                        "trigger_seg_id": active["id"],
-                        "delta": delta,
-                        "shifted": shifted,
-                    })
 
         _write_event(conn, req.session_id, "mutation", bort_id, {
             "track_id": req.track_id,
@@ -227,32 +318,11 @@ def mutate_bort(bort_id: str, req: MutateRequest):
             "text_len": len(req.text),
             "closed_active": active is not None,
         })
+        shifted_deps = _propagate_segment_starts(conn, bort_id, req.today_index)
+        if shifted_deps:
+            _write_event(conn, req.session_id, "dep_propagate", bort_id, {"shifted": shifted_deps})
         conn.commit()
     return {"ok": True}
-
-
-def _cascade_shift_downstream(conn, pred_id: int, delta: int, visited: set) -> list[dict]:
-    """Сдвигает planned-сегменты, у которых pred_id в depends_on.
-    Затем рекурсивно проходит по их downstream. Возвращает список сдвигов."""
-    if pred_id in visited:
-        return []
-    visited.add(pred_id)
-    rows = conn.execute("SELECT id, depends_on, start, status FROM segments").fetchall()
-    shifted = []
-    for s in rows:
-        if s["status"] != "planned":
-            continue
-        try:
-            deps = _json.loads(s["depends_on"] or "[]")
-        except _json.JSONDecodeError:
-            continue
-        if pred_id not in deps:
-            continue
-        new_start = s["start"] + delta
-        conn.execute("UPDATE segments SET start = ? WHERE id = ?", (new_start, s["id"]))
-        shifted.append({"seg_id": s["id"], "old_start": s["start"], "new_start": new_start})
-        shifted.extend(_cascade_shift_downstream(conn, s["id"], delta, visited))
-    return shifted
 
 
 @app.post("/api/borts/{bort_id}/subtasks")
@@ -351,6 +421,16 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
 
         params.append(seg_id)
         conn.execute(f"UPDATE segments SET {', '.join(updates)} WHERE id = ?", params)
+
+        # сняли все зависимости → сегмент возвращается к "естественному" месту в треке
+        if req.depends_on is not None and not req.depends_on and req.start is None:
+            natural = _natural_start_in_track(conn, seg["track_id"], seg_id, req.today_index)
+            if natural is not None and seg["start"] != natural:
+                conn.execute("UPDATE segments SET start = ? WHERE id = ?", (natural, seg_id))
+                changes["start"] = natural
+
+        shifted_deps = _propagate_segment_starts(conn, bort_id, req.today_index)
+        changes["shifted_by_deps"] = shifted_deps
         _write_event(conn, req.session_id, "segment_patch", bort_id, changes)
         conn.commit()
     return {"ok": True}
@@ -451,6 +531,46 @@ def delete_track(bort_id: str, track_id: int, session_id: str = ""):
         })
         conn.commit()
     return {"ok": True, "segments_deleted": seg_count}
+
+
+@app.post("/api/borts/{bort_id}/tracks/{track_id}/segments")
+def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
+    """Добавить сегмент в трек борта. Старт: после последнего сегмента трека,
+    либо с today_index для пустого трека."""
+    if not req.label.strip():
+        raise HTTPException(400, "label is required")
+    with get_conn() as conn:
+        tr = conn.execute(
+            "SELECT * FROM tracks WHERE id = ? AND bort_id = ?",
+            (track_id, bort_id),
+        ).fetchone()
+        if not tr:
+            raise HTTPException(404, f"track {track_id} not in bort {bort_id}")
+        b = conn.execute("SELECT case_start FROM borts WHERE id = ?", (bort_id,)).fetchone()
+        case_start = b["case_start"] if b else 0
+        last = conn.execute(
+            "SELECT start, days FROM segments WHERE track_id = ? ORDER BY ord, id DESC LIMIT 1",
+            (track_id,),
+        ).fetchone()
+        if last:
+            start = last["start"] + max(0, last["days"])
+        else:
+            start = req.today_index - case_start
+        max_ord = conn.execute(
+            "SELECT COALESCE(MAX(ord), -1) FROM segments WHERE track_id = ?", (track_id,),
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO segments (track_id, kind, label, start, days, status, ord) "
+            "VALUES (?, ?, ?, ?, ?, 'planned', ?)",
+            (track_id, req.kind, req.label, start, max(0, req.days), max_ord + 1),
+        )
+        seg_id = cur.lastrowid
+        _write_event(conn, req.session_id, "segment_add", bort_id, {
+            "track_id": track_id, "seg_id": seg_id, "label": req.label, "start": start,
+        })
+        _propagate_segment_starts(conn, bort_id, req.today_index)
+        conn.commit()
+    return {"ok": True, "seg_id": seg_id, "start": start}
 
 
 @app.patch("/api/borts/{bort_id}")
@@ -610,24 +730,31 @@ def _load_template_full(conn, template_id: str) -> dict | None:
                 depends_on = _json.loads(s["depends_on"]) if s["depends_on"] else []
             except (_json.JSONDecodeError, KeyError):
                 depends_on = []
+            if s["start"] >= 0:
+                seg_start = s["start"]
+            else:
+                seg_start = track_cursor
             out_segments.append({
                 "id": s["id"],
                 "kind": s["kind"],
                 "label": s["label"],
-                "start": track_cursor,
+                "start": seg_start,
                 "days": s["days"],
                 "status": "planned",
                 "depends_on": depends_on,
                 "dept": s["dept"] or "",
                 "assignee": s["assignee"] or "",
             })
-            track_cursor += max(0, s["days"])
+            track_cursor = seg_start + max(0, s["days"])
         out_tracks.append({
             "id": t["id"],
             "name": t["name"],
             "sub": bool(t["is_sub"]),
             "segments": out_segments,
         })
+    # сдвиг по зависимостям на уровне ВСЕГО шаблона (зависимости могут быть между треками)
+    all_segments = [s for t in out_tracks for s in t["segments"]]
+    _shift_template_starts(all_segments)
     return {"id": tpl["id"], "name": tpl["name"], "tracks": out_tracks}
 
 
@@ -785,9 +912,9 @@ def add_template_segment(template_id: str, track_id: int, req: TemplateSegmentRe
             "SELECT COALESCE(MAX(ord), -1) FROM template_segments WHERE track_id = ?", (track_id,),
         ).fetchone()[0]
         cur = conn.execute(
-            "INSERT INTO template_segments (track_id, kind, label, days, dept, assignee, ord) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (track_id, req.kind, req.label, max(0, req.days), req.dept, req.assignee, max_ord + 1),
+            "INSERT INTO template_segments (track_id, kind, label, days, dept, assignee, start, ord) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (track_id, req.kind, req.label, max(0, req.days), req.dept, req.assignee, req.start, max_ord + 1),
         )
         seg_id = cur.lastrowid
         _write_event(conn, req.session_id, "template_segment_add", template_id, {
@@ -822,6 +949,8 @@ def patch_template_segment(template_id: str, track_id: int, seg_id: int, req: Te
             updates.append("depends_on = ?")
             params.append(_json.dumps(req.depends_on, ensure_ascii=False))
             changes["depends_on"] = req.depends_on
+        if req.start is not None:
+            updates.append("start = ?"); params.append(max(-1, req.start)); changes["start"] = req.start
         if not updates:
             raise HTTPException(400, "nothing to update")
         params.append(seg_id)
@@ -886,7 +1015,10 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
                 (t["id"],),
             ).fetchall()
             for s_idx, s in enumerate(segs):
-                start = track_cursor
+                if s["start"] >= 0:
+                    start = req.today_index + s["start"]
+                else:
+                    start = track_cursor
                 days = max(0, int(s["days"]))
                 scur = conn.execute(
                     "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee) "
@@ -911,11 +1043,14 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
                     "UPDATE segments SET depends_on = ? WHERE id = ?",
                     (_json.dumps(mapped), new_seg_id),
                 )
+        # авто-сдвиг: зависимые сегменты стартуют после конца предшественников
+        shifted_deps = _propagate_segment_starts(conn, bort_id, req.today_index)
 
         _write_event(conn, req.session_id, "template_apply", bort_id, {
             "template_id": req.template_id,
             "tracks_added": tracks_added,
             "segments_added": segs_added,
+            "shifted_by_deps": shifted_deps,
         })
         conn.commit()
     return {"ok": True, "tracks_added": tracks_added, "segments_added": segs_added}

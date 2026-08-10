@@ -238,14 +238,20 @@
   .seg.st-planned.hold-parts,.seg.st-planned.hold-people,.seg.st-planned.hold-approve{border-color:var(--hold);color:var(--hold);}
 
   /* только что стартовавший сегмент (0 дней) — честная точка, а не выдуманный день */
-  .seg-stub{position:absolute;top:7px;width:10px;height:10px;border-radius:50%;
-    transform:translateX(-5px);cursor:pointer;z-index:1;}
+  .seg-stub{position:absolute;top:7px;width:10px;height:10px;border-radius:50%;transform:translateX(-5px);cursor:pointer;z-index:1;}
   .seg-stub.work{background:var(--work);}
   .seg-stub.test{background:var(--test);}
   .seg-stub.think{background:var(--think);}
   .seg-stub.hold-parts, .seg-stub.hold-people, .seg-stub.hold-approve{background:var(--hold);}
   .seg-stub.st-active{box-shadow:0 0 0 4px rgba(237,232,227,.14);animation:stubpulse 1.6s ease-in-out infinite;}
   @keyframes stubpulse{0%,100%{box-shadow:0 0 0 3px rgba(237,232,227,.10);}50%{box-shadow:0 0 0 6px rgba(237,232,227,.20);}}
+
+  /* пустой трек — фантомная строка, чтобы было куда кликать ПКМ */
+  .seg-empty{position:absolute;inset:2px 0;width:100%;border:1.5px dashed var(--line);border-radius:3px;
+    display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;
+    cursor:pointer;user-select:none;}
+  .seg-empty::after{content:'+';font-size:13px;margin-left:4px;}
+  .seg-empty:hover{border-color:var(--accent);color:var(--accent);}
 
   .today-line{position:absolute;top:0;bottom:0;width:1.5px;background:var(--accent);opacity:.85;z-index:2;}
   .today-tag{position:absolute;top:-16px;transform:translateX(-50%);font-family:'JetBrains Mono',monospace;
@@ -535,6 +541,12 @@ function buildRuler(minStart, axisTotal){
 }
 
 function renderTrackRow(track, roleClass, bortIdx, trackIdx){
+  if (!track.segments || track.segments.length === 0){
+    return `<div class="track-row ${roleClass}">
+      <div class="seg-empty" data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-dep-id="-1"
+        data-tip="Пусто — ПКМ, чтобы добавить задачу">добавить задачу</div>
+    </div>`;
+  }
   const segHtml = track.segments.map((seg, segIdx) => {
     const left = seg.start * PX_PER_DAY;
     const width = (seg.status === "active" ? Math.max(0, TODAY_INDEX - seg.start) : seg.days) * PX_PER_DAY;
@@ -814,7 +826,7 @@ function renderTemplateCard(tpl, idx, chartWidth){
 
 const tooltip = document.getElementById("tooltip");
 function bindTooltips(){
-  document.querySelectorAll(".seg").forEach(seg=>{
+  document.querySelectorAll(".seg, .seg-empty").forEach(seg=>{
     const tip = seg.dataset.tip;
     seg.addEventListener("mousemove", e=>{
       tooltip.textContent = tip;
@@ -830,21 +842,21 @@ function bindTooltips(){
       e.preventDefault();
       const card = seg.closest(".card");
       const trackIdx = Number(seg.dataset.trackIdx);
-      const segIdx = Number(seg.dataset.segIdx);
       const tplId = card && card.dataset.tplId;
-      let bort, track, segData;
+      const isEmpty = seg.classList.contains("seg-empty");
+      let bort, track, segData, segIdx = -1, idx = Number(seg.dataset.bortIdx);
       if (tplId){
         bort = (TEMPLATES || []).find(t => String(t.id) === tplId);
         if (!bort) return;
         track = bort.tracks[trackIdx];
-        segData = track.segments[segIdx];
+        if (!isEmpty) segIdx = Number(seg.dataset.segIdx);
       } else {
-        const idx = Number(seg.dataset.bortIdx);
         bort = DATA[idx];
         track = bort.tracks[trackIdx];
-        segData = track.segments[segIdx];
+        if (!isEmpty) segIdx = Number(seg.dataset.segIdx);
       }
-      showCtxMenu(e.clientX, e.clientY, bort, track, segData, Number(seg.dataset.bortIdx), trackIdx, segIdx);
+      segData = isEmpty ? null : track.segments[segIdx];
+      showCtxMenu(e.clientX, e.clientY, bort, track, segData, idx, trackIdx, segIdx);
     });
   });
 }
@@ -865,9 +877,49 @@ const KIND_OPTIONS = [
 ];
 const STATUS_OPTIONS = [["active", "active"], ["done", "done"], ["planned", "planned"]];
 
-function renderTemplateCtxMenu(bort, track, seg){
+function isTemplateBort(bortId){
+  return (TEMPLATES || []).some(t => t.id === bortId);
+}
+
+function renderCtxMenu(bort, track, seg, idx, trackIdx, segIdx){
+  const isTpl = isTemplateBort(bort.id);
+  const kindLabel = KIND_OPTIONS.find(k => k[0] === seg?.kind)?.[1] || seg?.kind;
   const onlyOneTrack = bort.tracks.length === 1;
   const onlyOneSeg = track.segments.length === 1;
+
+  // пустой трек — нечего редактировать, только добавить задачу
+  if (!seg){
+    return `
+      <div class="ctx-label">${escapeHtml(bort.id)} · ${escapeHtml(track.name)}</div>
+      <div class="ctx-item disabled"><span>Трек</span><span class="ctx-hint">пусто</span></div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item" data-action="add_seg_here">➕ Добавить задачу</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-label">Трек</div>
+      <div class="ctx-item" data-action="rename_track"><span>Переименовать трек</span></div>
+      ${onlyOneTrack ? "" : `<div class="ctx-item danger" data-action="del_track"><span>Удалить трек</span></div>`}
+      <div class="ctx-sep"></div>
+      <div class="ctx-label">${isTpl ? "Шаблон" : "Борт"}</div>
+      ${isTpl
+        ? `<div class="ctx-item" data-action="rename_template"><span>Переименовать</span></div>
+           <div class="ctx-item" data-action="apply_template">Применить к борту</div>
+           <div class="ctx-item danger" data-action="del_template"><span>Удалить шаблон</span></div>`
+        : `<div class="ctx-item" data-action="rename_bort"><span>Переименовать (описание)</span></div>
+           <div class="ctx-item" data-action="add_subtask"><span>+ подзадача</span></div>
+           <div class="ctx-item danger" data-action="del_bort"><span>Удалить борт</span></div>`}
+    `;
+  }
+
+  // проверить blocked: planned с незакрытыми зависимостями
+  const blocked = (seg.depends_on || []).filter(depId => {
+    for (const t of bort.tracks){
+      for (const s of t.segments){
+        if (s.id === depId && s.status !== "done") return true;
+      }
+    }
+    return false;
+  });
+  const startHint = isTpl ? `Д+${seg.start}` : `Д+${seg.start - (bort.caseStart || 0)}`;
   return `
     <div class="ctx-label">${escapeHtml(bort.id)} · ${escapeHtml(track.name)}</div>
     <div class="ctx-item disabled"><span>Сегмент</span><span class="ctx-hint">${escapeHtml(seg.label)}</span></div>
@@ -881,71 +933,21 @@ function renderTemplateCtxMenu(bort, track, seg){
     ).join("")}
     <div class="ctx-sep"></div>
 
-    <div class="ctx-item" data-action="set_label"><span>Название: <span class="ctx-hint">${escapeHtml(seg.label)}</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="dept_seg"><span>Отдел: <span class="ctx-hint">${seg.dept || '—'}</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="assign_seg"><span>Исполнитель: <span class="ctx-hint">${seg.assignee || '—'}</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="set_deps"><span>Зависит от: <span class="ctx-hint">${(seg.depends_on && seg.depends_on.length) ? seg.depends_on.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="pick_dep_target"><span>🔗 Тянуть зависимость от сюда</span></div>
-    <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
-    <div class="ctx-sep"></div>
-
-    <div class="ctx-label">Трек</div>
-    <div class="ctx-item" data-action="rename_track"><span>Переименовать трек</span></div>
-    ${onlyOneTrack ? "" : `<div class="ctx-item danger" data-action="del_track"><span>Удалить трек</span>` + (onlyOneSeg ? " <span class='ctx-hint'>(пуст)</span>" : "") + `</div>`}
-    <div class="ctx-sep"></div>
-
-    <div class="ctx-label">Шаблон</div>
-    <div class="ctx-item" data-action="rename_template"><span>Переименовать</span></div>
-    <div class="ctx-item" data-action="apply_template">Применить к борту</div>
-  `;
-}
-
-function isTemplateBort(bortId){
-  return (TEMPLATES || []).some(t => t.id === bortId);
-}
-
-function renderCtxMenu(bort, track, seg, idx, trackIdx){
-  const isTpl = (TEMPLATES || []).some(t => t.id === bort.id);
-  if (isTpl) return renderTemplateCtxMenu(bort, track, seg);
-  const kindLabel = KIND_OPTIONS.find(k => k[0] === seg.kind)?.[1] || seg.kind;
-  const onlyOneTrack = bort.tracks.length === 1;
-  const onlyOneSeg = track.segments.length === 1;
-  // проверить blocked: planned с незакрытыми зависимостями
-  const blocked = (seg.depends_on || []).filter(depId => {
-    for (const t of bort.tracks){
-      for (const s of t.segments){
-        if (s.id === depId && s.status !== "done") return true;
-      }
-    }
-    return false;
-  });
-  return `
-    <div class="ctx-label">${bort.id} · ${track.name}</div>
-    <div class="ctx-item disabled"><span>Сегмент</span><span class="ctx-hint">${seg.label}</span></div>
-    <div class="ctx-sep"></div>
-
-    <div class="ctx-label">Тип</div>
-    ${KIND_OPTIONS.map(([v, l]) =>
-      `<div class="ctx-item" data-action="set:kind:${v}">
-         <span>${l}</span>${v === seg.kind ? '<span class="ctx-hint">●</span>' : ''}
-       </div>`
-    ).join("")}
-    <div class="ctx-sep"></div>
-
-    <div class="ctx-label">Статус</div>
-    ${STATUS_OPTIONS.map(([v, l]) =>
-      `<div class="ctx-item" data-action="set:status:${v}">
-         <span>${v}</span>${v === seg.status ? '<span class="ctx-hint">●</span>' : ''}
-       </div>`
-    ).join("")}
-    <div class="ctx-sep"></div>
+    ${isTpl ? "" : `
+      <div class="ctx-label">Статус</div>
+      ${STATUS_OPTIONS.map(([v, l]) =>
+        `<div class="ctx-item" data-action="set:status:${v}">
+           <span>${v}</span>${v === seg.status ? '<span class="ctx-hint">●</span>' : ''}
+         </div>`
+      ).join("")}
+      <div class="ctx-sep"></div>
+    `}
 
     <div class="ctx-item" data-action="set_days"><span>Длительность: <span class="ctx-hint">${seg.days}д</span></span><span class="ctx-hint">✎</span></div>
-    <div class="ctx-item" data-action="set_start"><span>Старт: <span class="ctx-hint">${dateLabel(seg.start)}</span></span><span class="ctx-hint">✎</span></div>
-    ${seg.status === "planned" && blocked.length === 0
+    <div class="ctx-item" data-action="set_start"><span>Старт: <span class="ctx-hint">${startHint}</span></span><span class="ctx-hint">✎</span></div>
+    ${!isTpl && seg.status === "planned" && blocked.length === 0
       ? `<div class="ctx-item" data-action="activate_seg"><span>▶ Сделать активным</span></div>`
-      : seg.status === "planned" && blocked.length > 0
+      : !isTpl && seg.status === "planned" && blocked.length > 0
         ? `<div class="ctx-item disabled"><span>⚠ Заблокировано: ${blocked.map(x => '#'+x).join(', ')}</span></div>`
         : ""}
     <div class="ctx-item" data-action="dept_seg"><span>Отдел: <span class="ctx-hint">${seg.dept || '—'}</span></span><span class="ctx-hint">✎</span></div>
@@ -960,16 +962,20 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx){
     ${onlyOneTrack ? "" : `<div class="ctx-item danger" data-action="del_track"><span>Удалить трек</span>` + (onlyOneSeg ? " <span class='ctx-hint'>(пуст)</span>" : "") + `</div>`}
     <div class="ctx-sep"></div>
 
-    <div class="ctx-label">Борт</div>
-    <div class="ctx-item" data-action="rename_bort"><span>Переименовать (описание)</span></div>
-    <div class="ctx-item" data-action="add_subtask"><span>+ подзадача</span></div>
-    <div class="ctx-item danger" data-action="del_bort"><span>Удалить борт</span></div>
+    <div class="ctx-label">${isTpl ? "Шаблон" : "Борт"}</div>
+    ${isTpl
+      ? `<div class="ctx-item" data-action="rename_template"><span>Переименовать</span></div>
+         <div class="ctx-item" data-action="apply_template">Применить к борту</div>
+         <div class="ctx-item danger" data-action="del_template"><span>Удалить шаблон</span></div>`
+      : `<div class="ctx-item" data-action="rename_bort"><span>Переименовать (описание)</span></div>
+         <div class="ctx-item" data-action="add_subtask"><span>+ подзадача</span></div>
+         <div class="ctx-item danger" data-action="del_bort"><span>Удалить борт</span></div>`}
   `;
 }
 
 function showCtxMenu(x, y, bort, track, seg, idx, trackIdx, segIdx){
   ctxCtx = {bort, track, seg, idx, trackIdx, segIdx};
-  ctxMenu.innerHTML = renderCtxMenu(bort, track, seg, idx, trackIdx);
+  ctxMenu.innerHTML = renderCtxMenu(bort, track, seg, idx, trackIdx, segIdx);
   ctxMenu.querySelectorAll(".ctx-item").forEach(it => {
     if (it.classList.contains("disabled")) return;
     it.onclick = (ev) => {
@@ -992,9 +998,9 @@ function showCtxMenu(x, y, bort, track, seg, idx, trackIdx, segIdx){
   ny = Math.max(PAD, Math.min(ny, window.innerHeight - r.height - PAD));
   ctxMenu.style.left = nx + "px";
   ctxMenu.style.top = ny + "px";
-  trackEvent("context_open", `${bort.id}/track/${trackIdx}/seg/${segIdx}`, {
-    kind: seg.kind, status: seg.status, days: seg.days, start: seg.start,
-  });
+  trackEvent("context_open", `${bort.id}/track/${trackIdx}/seg/${segIdx}`, seg
+    ? {kind: seg.kind, status: seg.status, days: seg.days, start: seg.start}
+    : {empty_track: true});
 }
 
 function hideCtxMenu(){
@@ -1005,10 +1011,11 @@ function hideCtxMenu(){
 async function runCtxAction(action){
   if (!ctxCtx) return;
   const {bort, track, seg, idx, trackIdx, segIdx} = ctxCtx;
-  const segId = seg.id;
+  const segId = seg ? seg.id : null;
   const trackId = track.id;
   const bortId = bort.id;
   const isTpl = isTemplateBort(bortId);
+  const extraPatch = isTpl ? {} : {today_index: TODAY_INDEX};
 
   // URL хелперы для борт/шаблон
   const segUrl = isTpl
@@ -1027,7 +1034,7 @@ async function runCtxAction(action){
     fetch(segUrl, {
       method: "PATCH",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({...patch, session_id: SESSION_ID}),
+      body: JSON.stringify({...patch, ...extraPatch, session_id: SESSION_ID}),
     })
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(() => { setStatus("обновлено"); renderAll(); })
@@ -1044,27 +1051,23 @@ async function runCtxAction(action){
     const n = Number(v);
     if (!Number.isFinite(n) || n < 0){ alert("Должно быть числом ≥ 0"); return; }
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_days", days: n});
-    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({days: n, session_id: SESSION_ID})})
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({days: n, ...extraPatch, session_id: SESSION_ID})})
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(() => { setStatus("длительность обновлена"); seg.days = n; renderAll(); })
       .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "set_start"){
-    const v = prompt("Стартовый день (число от 0 или дата DD.MM):", String(seg.start));
+    const curDay = isTpl ? seg.start : (seg.start - (bort.caseStart || 0));
+    const v = prompt("День от начала (0 = первый день):", String(curDay));
     if (v === null) return;
-    let n;
-    if (/^\d+(\.\d+)?$/.test(v.trim())){
-      n = Number(v);
-    } else {
-      n = parseDate(v);
-      if (n === null){ alert("Не понял: «" + v + "». Введите число или DD.MM (например 10.08)"); return; }
-    }
-    if (!Number.isFinite(n) || n < 0){ alert("Должно быть ≥ 0"); return; }
-    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_start", start: n});
-    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({start: n, session_id: SESSION_ID})})
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0){ alert("Введите целое число ≥ 0 (день от начала)"); return; }
+    const newStart = isTpl ? n : (bort.caseStart || 0) + n;
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_start", start: newStart});
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({start: newStart, ...extraPatch, session_id: SESSION_ID})})
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(() => { setStatus("старт обновлён"); seg.start = n; renderAll(); })
+      .then(() => { setStatus("старт обновлён"); seg.start = newStart; renderAll(); })
       .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
@@ -1072,7 +1075,7 @@ async function runCtxAction(action){
     const v = prompt("Название сегмента:", seg.label);
     if (v === null || !v.trim()) return;
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_label", label: v.trim()});
-    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({label: v.trim(), session_id: SESSION_ID})})
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({label: v.trim(), ...extraPatch, session_id: SESSION_ID})})
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(() => { setStatus("название обновлено"); seg.label = v.trim(); renderAll(); })
       .catch(err => setStatus("ошибка: " + err.message));
@@ -1089,7 +1092,7 @@ async function runCtxAction(action){
       if (found) validIds.push(tid);
     }
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_deps", deps: validIds});
-    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({depends_on: validIds, session_id: SESSION_ID})})
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({depends_on: validIds, ...extraPatch, session_id: SESSION_ID})})
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(() => { setStatus("зависимости обновлены"); seg.depends_on = validIds; renderAll(); })
       .catch(err => setStatus("ошибка: " + err.message));
@@ -1117,7 +1120,7 @@ async function runCtxAction(action){
     const v = prompt("Отдел для задачи (механика, видео, телеметрия, электроника...):", seg.dept || "");
     if (v === null) return;
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "dept_seg", dept: v.trim()});
-    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({dept: v.trim(), session_id: SESSION_ID})})
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({dept: v.trim(), ...extraPatch, session_id: SESSION_ID})})
       .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(() => { setStatus("отдел обновлён"); seg.dept = v.trim(); renderAll(); })
       .catch(err => setStatus("ошибка: " + err.message));
@@ -1142,6 +1145,22 @@ async function runCtxAction(action){
       .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
+  if (action === "add_seg_here"){
+    const v = prompt("Название задачи в треке «" + track.name + "»:", "");
+    if (v === null || !v.trim()) return;
+    trackEvent("context_action", `${bortId}/track/${trackId}`, {action: "add_seg_here", label: v.trim()});
+    const url = isTpl
+      ? API_BASE + "/api/templates/" + bortId + "/tracks/" + trackId + "/segments"
+      : API_BASE + "/api/borts/" + bortId + "/tracks/" + trackId + "/segments";
+    const body = isTpl
+      ? {kind: "work", label: v.trim(), days: 0, session_id: SESSION_ID}
+      : {kind: "work", label: v.trim(), days: 0, today_index: TODAY_INDEX, session_id: SESSION_ID};
+    fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("задача добавлена"); refetch(); })
+      .catch(err => setStatus("ошибка: " + err.message));
+    return;
+  }
   if (action === "rename_template"){
     const tpl = TEMPLATES.find(t => t.id === bortId);
     const v = prompt("Новое название шаблона:", (tpl && tpl.name) || bortId);
@@ -1155,6 +1174,21 @@ async function runCtxAction(action){
   }
   if (action === "apply_template"){
     applyTemplateToBort(bortId);
+    return;
+  }
+  if (action === "del_template"){
+    if (!isTpl) return;
+    if (!confirm(`Удалить шаблон ${bortId}?`)) return;
+    trackEvent("context_action", bortId, {action: "del_template"});
+    fetch(API_BASE + "/api/templates/" + bortId + "?session_id=" + encodeURIComponent(SESSION_ID), {method: "DELETE"})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => {
+        setStatus("шаблон удалён");
+        const tplIdx = TEMPLATES.findIndex(t => String(t.id) === String(bortId));
+        if (tplIdx >= 0) TEMPLATES.splice(tplIdx, 1);
+        renderAll();
+      })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "rename_track"){
