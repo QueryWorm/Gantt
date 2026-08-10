@@ -795,6 +795,19 @@ _TEST_DATA = [
         ],
         "log": [],
     },
+    {
+        "id": "FPV-11", "desc": "командная задача — нужен электронщик, но не критично кто",
+        "dept": "электроника", "assignee": "", "case_start": 22, "priority": 4,
+        "tracks": [
+            {"name": "Ревизия платы", "sub": False, "segments": [
+                {"kind": "think", "label": "Осмотр", "start": 22, "days": 1, "status": "active"},
+                {"kind": "work", "label": "Прозвонка", "start": 23, "days": 2, "status": "planned"},
+            ]},
+        ],
+        "log": [
+            {"date": "09.08", "stage": "Осмотр", "text": "Назначено отделу, конкретный исполнитель определится при осмотре."},
+        ],
+    },
 ]
 
 

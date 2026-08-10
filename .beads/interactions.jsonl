@@ -11,3 +11,4 @@
 {"id":"int-6213e46b","kind":"field_change","created_at":"2026-08-10T19:22:00.210218454Z","actor":"QueryWorm","issue_id":"Gantt-pxo","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-aeeacb7d","kind":"field_change","created_at":"2026-08-10T19:35:14.390423218Z","actor":"QueryWorm","issue_id":"Gantt-rvj","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-23241803","kind":"field_change","created_at":"2026-08-10T19:45:16.400971793Z","actor":"QueryWorm","issue_id":"Gantt-z36","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-4ae398dc","kind":"field_change","created_at":"2026-08-10T19:55:19.056660113Z","actor":"QueryWorm","issue_id":"Gantt-ca2","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
