@@ -246,12 +246,8 @@
   .seg-stub.st-active{box-shadow:0 0 0 4px rgba(237,232,227,.14);animation:stubpulse 1.6s ease-in-out infinite;}
   @keyframes stubpulse{0%,100%{box-shadow:0 0 0 3px rgba(237,232,227,.10);}50%{box-shadow:0 0 0 6px rgba(237,232,227,.20);}}
 
-  /* пустой трек — фантомная строка, чтобы было куда кликать ПКМ */
-  .seg-empty{position:absolute;inset:2px 0;width:100%;border:1.5px dashed var(--line);border-radius:3px;
-    display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;
-    cursor:pointer;user-select:none;}
-  .seg-empty::after{content:'+';font-size:13px;margin-left:4px;}
-  .seg-empty:hover{border-color:var(--accent);color:var(--accent);}
+  /* невидимая зона на всю строку: ПКМ по пустому месту — добавить задачу */
+  .seg-empty{position:absolute;inset:0;width:100%;z-index:0;cursor:default;}
 
   .today-line{position:absolute;top:0;bottom:0;width:1.5px;background:var(--accent);opacity:.85;z-index:2;}
   .today-tag{position:absolute;top:-16px;transform:translateX(-50%);font-family:'JetBrains Mono',monospace;
@@ -541,12 +537,6 @@ function buildRuler(minStart, axisTotal){
 }
 
 function renderTrackRow(track, roleClass, bortIdx, trackIdx){
-  if (!track.segments || track.segments.length === 0){
-    return `<div class="track-row ${roleClass}">
-      <div class="seg-empty" data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-dep-id="-1"
-        data-tip="Пусто — ПКМ, чтобы добавить задачу">добавить задачу</div>
-    </div>`;
-  }
   const segHtml = track.segments.map((seg, segIdx) => {
     const left = seg.start * PX_PER_DAY;
     const width = (seg.status === "active" ? Math.max(0, TODAY_INDEX - seg.start) : seg.days) * PX_PER_DAY;
@@ -569,7 +559,10 @@ function renderTrackRow(track, roleClass, bortIdx, trackIdx){
     const text = width > 50 ? seg.label : "";
     return `<div class="seg ${kindClass} ${statusClass}" style="left:${left}px;width:${width}px" data-tip="${tip}" ${idxAttrs}>${text}</div>`;
   }).join("");
-  return `<div class="track-row ${roleClass}">${segHtml}</div>`;
+  return `<div class="track-row ${roleClass}">
+    <div class="seg-empty" data-bort-idx="${bortIdx}" data-track-idx="${trackIdx}" data-dep-id="-1"></div>
+    ${segHtml}
+  </div>`;
 }
 
 const segKindLabel = {work:"Работа", test:"Тест", think:"Разбор",
@@ -829,6 +822,7 @@ function bindTooltips(){
   document.querySelectorAll(".seg, .seg-empty, .seg-stub").forEach(seg=>{
     const tip = seg.dataset.tip;
     seg.addEventListener("mousemove", e=>{
+      if (!tip) return;
       tooltip.textContent = tip;
       tooltip.style.left = (e.clientX + 14) + "px";
       tooltip.style.top = (e.clientY + 14) + "px";
@@ -836,7 +830,7 @@ function bindTooltips(){
     });
     seg.addEventListener("mouseleave", ()=> tooltip.classList.remove("show"));
     seg.addEventListener("click", ()=>{
-      trackEvent("click_segment", tip, {left: seg.style.left, width: seg.style.width});
+      if (tip) trackEvent("click_segment", tip, {left: seg.style.left, width: seg.style.width});
     });
     seg.addEventListener("contextmenu", e=>{
       e.preventDefault();
@@ -887,11 +881,10 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx, segIdx){
   const onlyOneTrack = bort.tracks.length === 1;
   const onlyOneSeg = track.segments.length === 1;
 
-  // пустой трек — нечего редактировать, только добавить задачу
+  // пустой трек / пустое место — нечего редактировать, только добавить задачу
   if (!seg){
     return `
       <div class="ctx-label">${escapeHtml(bort.id)} · ${escapeHtml(track.name)}</div>
-      <div class="ctx-item disabled"><span>Трек</span><span class="ctx-hint">пусто</span></div>
       <div class="ctx-sep"></div>
       <div class="ctx-item" data-action="add_seg_here">➕ Добавить задачу</div>
       <div class="ctx-sep"></div>
