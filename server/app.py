@@ -68,6 +68,19 @@ def _row_to_segment(r) -> dict:
     }
 
 
+def _seg_last_day(start: int, days: int, status: str, today_index: int) -> int:
+    """Последний занятый день сегмента. Нулевой день: следующая задача
+    стартует в последний день предыдущей (start + days - 1), а не на
+    следующий день после конца. Active ещё идёт — её последний день это
+    сегодня. Не раньше фактического дня today_index."""
+    days = max(0, days)
+    if status == "active":
+        return max(start + days, today_index)
+    if days == 0:
+        return start
+    return max(start + days - 1, today_index)
+
+
 def _row_to_track(r, segments: list[dict]) -> dict:
     return {
         "id": r["id"],
@@ -143,8 +156,11 @@ def _rebuild_planned_starts(conn, bort_id: str, today_index: int = 0):
     """Единый пересчёт start для всех planned-сегментов борта.
 
     Правило: start = max(текущий start, естественное место в треке,
-    конец предшественников). Естественное место — сразу после предыдущего
-    сегмента того же трека; конец предшественников — по depends_on.
+    последний занятый день предшественников). Естественное место — нулевой
+    день: сразу в последний день предыдущего сегмента того же трека
+    (start + days - 1); предшественники по depends_on — тоже последний
+    занятый день (не следующий после конца). Active: последний известный
+    день — сегодня.
 
     Движение ТОЛЬКО вперёд: сегменты, поставленные вручную дальше, не
     откатываются. Правило действует для ВСЕХ planned (не только с depends_on),
@@ -164,10 +180,17 @@ def _rebuild_planned_starts(conn, bort_id: str, today_index: int = 0):
         by_track.setdefault(r["track_id"], []).append(dict(r))
 
     def end_of(s: dict) -> int:
+        """Последний занятый день. Нулевой день: следующая задача стартует в
+        последний день предыдущей (start + days - 1), а не на следующий день
+        после конца (start + days)."""
         days = max(0, s["days"])
         if s["status"] == "active":
+            # активная ещё идёт: последний известный день — сегодня; следующий
+            # стартует в тот же день (нулевой день активной)
             return max(s["start"] + days, today_index)
-        return s["start"] + days
+        if days == 0:
+            return s["start"]  # точка-старт заняла свой день
+        return s["start"] + days - 1
 
     shifted = 0
     for _round in range(100):
@@ -213,8 +236,7 @@ def _natural_start_in_track(conn, track_id: int, seg_id: int, today_index: int) 
     ).fetchone()
     if not prev:
         return None
-    days = max(0, prev["days"])
-    return max(prev["start"] + days, today_index)  # не раньше фактического дня
+    return _seg_last_day(prev["start"], prev["days"], prev["status"], today_index)
 
 
 def _shift_template_starts(out_segments: list[dict]) -> None:
@@ -574,11 +596,11 @@ def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
             start = req.start
         else:
             last = conn.execute(
-                "SELECT start, days FROM segments WHERE track_id = ? ORDER BY ord DESC, id DESC LIMIT 1",
+                "SELECT start, days, status FROM segments WHERE track_id = ? ORDER BY ord DESC, id DESC LIMIT 1",
                 (track_id,),
             ).fetchone()
             if last:
-                start = max(last["start"] + max(0, last["days"]), req.today_index)
+                start = _seg_last_day(last["start"], last["days"], last["status"], req.today_index)
             else:
                 start = req.today_index
             max_ord = conn.execute(
