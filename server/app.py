@@ -174,7 +174,7 @@ def _propagate_segment_starts(conn, bort_id: str, today_index: int = 0):
                 if prev_end is None:
                     natural = s["start"]
                 else:
-                    natural = prev_end
+                    natural = max(prev_end, today_index)  # не раньше фактического дня
                 try:
                     deps = _json.loads(s["depends_on"]) if s["depends_on"] else []
                 except (_json.JSONDecodeError, KeyError):
@@ -204,15 +204,13 @@ def _natural_start_in_track(conn, track_id: int, seg_id: int, today_index: int) 
         "SELECT start, days, status FROM segments "
         "WHERE track_id = ? AND id != ? AND (ord < (SELECT ord FROM segments WHERE id = ?) "
         " OR (ord = (SELECT ord FROM segments WHERE id = ?) AND id < ?)) "
-        "ORDER BY ord, id DESC LIMIT 1",
+        "ORDER BY ord DESC, id DESC LIMIT 1",
         (track_id, seg_id, seg_id, seg_id, seg_id),
     ).fetchone()
     if not prev:
         return None
     days = max(0, prev["days"])
-    if prev["status"] == "active":
-        return max(prev["start"] + days, today_index)
-    return prev["start"] + days
+    return max(prev["start"] + days, today_index)  # не раньше фактического дня
 
 
 def _shift_template_starts(out_segments: list[dict]) -> None:
@@ -535,8 +533,9 @@ def delete_track(bort_id: str, track_id: int, session_id: str = ""):
 
 @app.post("/api/borts/{bort_id}/tracks/{track_id}/segments")
 def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
-    """Добавить сегмент в трек борта. Старт: после последнего сегмента трека,
-    либо с today_index для пустого трека."""
+    """Добавить сегмент в трек борта. Старт — не раньше фактического дня:
+    max(конец последнего сегмента трека, today_index). Иначе новая задача
+    окажется в прошлом."""
     if not req.label.strip():
         raise HTTPException(400, "label is required")
     with get_conn() as conn:
@@ -546,16 +545,14 @@ def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
         ).fetchone()
         if not tr:
             raise HTTPException(404, f"track {track_id} not in bort {bort_id}")
-        b = conn.execute("SELECT case_start FROM borts WHERE id = ?", (bort_id,)).fetchone()
-        case_start = b["case_start"] if b else 0
         last = conn.execute(
-            "SELECT start, days FROM segments WHERE track_id = ? ORDER BY ord, id DESC LIMIT 1",
+            "SELECT start, days FROM segments WHERE track_id = ? ORDER BY ord DESC, id DESC LIMIT 1",
             (track_id,),
         ).fetchone()
         if last:
-            start = last["start"] + max(0, last["days"])
+            start = max(last["start"] + max(0, last["days"]), req.today_index)
         else:
-            start = req.today_index - case_start
+            start = req.today_index
         max_ord = conn.execute(
             "SELECT COALESCE(MAX(ord), -1) FROM segments WHERE track_id = ?", (track_id,),
         ).fetchone()[0]
