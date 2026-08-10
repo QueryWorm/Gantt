@@ -818,15 +818,44 @@ function apiPatch(url, body, okMsg){
     body: JSON.stringify({...body, session_id: SESSION_ID}),
   })
     .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-    .then(() => setStatus(okMsg + " · " + dateLabel(TODAY_INDEX)))
+    .then(() => { setStatus(okMsg + " · " + dateLabel(TODAY_INDEX)); refetch(); })
     .catch(err => setStatus("ошибка API: " + err.message));
 }
 
 function apiDelete(url, okMsg){
   fetch(url + "?session_id=" + encodeURIComponent(SESSION_ID), {method: "DELETE"})
     .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-    .then(d => setStatus(okMsg + ` (вместе: ${d.segments_deleted ?? d.tracks_deleted ?? 0}) · ` + dateLabel(TODAY_INDEX)))
+    .then(d => { setStatus(okMsg + ` (вместе: ${d.segments_deleted ?? d.tracks_deleted ?? 0}) · ` + dateLabel(TODAY_INDEX)); refetch(); })
     .catch(err => setStatus("ошибка API: " + err.message));
+}
+
+// refetch с сервера — для синхронизации двух вкаладок и как единственный источник правды
+let refetchInFlight = false;
+let refetchQueued = false;
+async function refetch(){
+  if (refetchInFlight){
+    refetchQueued = true;
+    return;
+  }
+  refetchInFlight = true;
+  try{
+    const r = await fetch(API_BASE + "/api/borts");
+    if (!r.ok) return;
+    const parsed = await r.json();
+    if (parsed.DATA){
+      DATA.length = 0; DATA.push(...parsed.DATA);
+      QUEUE.length = 0; QUEUE.push(...(parsed.QUEUE || []));
+      renderAll();
+    }
+  }catch(e){
+    // молча — fetch уже даст ошибку в setStatus
+  }finally{
+    refetchInFlight = false;
+    if (refetchQueued){
+      refetchQueued = false;
+      refetch();
+    }
+  }
 }
 
 // закрытие контекстного меню
@@ -962,7 +991,7 @@ function pushMutation(bortId, body, okMsg){
     body: JSON.stringify(body),
   })
     .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-    .then(() => setStatus(okMsg || "сохранено в БД · " + dateLabel(TODAY_INDEX)))
+    .then(() => { setStatus(okMsg || "сохранено в БД · " + dateLabel(TODAY_INDEX)); refetch(); })
     .catch(err => setStatus("ошибка API: " + err.message));
 }
 
@@ -973,7 +1002,7 @@ function pushSubtask(bortId, body){
     body: JSON.stringify(body),
   })
     .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-    .then(() => setStatus("подзадача добавлена · " + dateLabel(TODAY_INDEX)))
+    .then(() => { setStatus("подзадача добавлена · " + dateLabel(TODAY_INDEX)); refetch(); })
     .catch(err => setStatus("ошибка API: " + err.message));
 }
 
@@ -1140,15 +1169,7 @@ function createNewBort(){
       return r.json();
     })
     .then(() => {
-      // добавляем в локальный DATA с одним пустым main-треком (нужен для рендера)
-      DATA.push({
-        id: cleanId,
-        desc: desc,
-        caseStart: TODAY_INDEX,
-        tracks: [{name: "Работа", sub: false, segments: []}],
-        log: [],
-      });
-      renderAll();
+      refetch();
       setStatus("ремонт " + cleanId + " создан · " + dateLabel(TODAY_INDEX));
     })
     .catch(err => setStatus("ошибка создания: " + err.message));
