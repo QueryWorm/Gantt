@@ -564,7 +564,8 @@ function buildRuler(targetId, minStart, axisTotal, pxPerDay){
               </div>`;
   }
   const inner = document.getElementById(targetId);
-  inner.style.width = width + "px";
+  inner.style.minWidth = width + "px";
+  inner.style.width = "100%";
   inner.innerHTML = ticks;
 }
 
@@ -708,7 +709,7 @@ function renderCard(bort, idx, sharedAxisTotal, pxPerDay, isTemplate=false){
       });
     });
   });
-  const depsSvg = `<svg class="deps-overlay" width="${chartWidth}" height="${svgHeight}" style="width:${chartWidth}px;height:${svgHeight}px">
+  const depsSvg = `<svg class="deps-overlay" width="${chartWidth}" height="${svgHeight}" style="width:100%;min-width:${chartWidth}px;height:${svgHeight}px">
     <defs>
       <marker id="arrow-${idx}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted-2)"/>
@@ -763,7 +764,7 @@ function renderCard(bort, idx, sharedAxisTotal, pxPerDay, isTemplate=false){
     <div class="gantt">
       <div class="gantt-labels">${labelsHtml}</div>
       <div class="gantt-chart-scroll" id="chart-scroll-${idx}">
-        <div class="gantt-chart-inner" style="width:${chartWidth}px;height:${svgHeight}px">
+        <div class="gantt-chart-inner" style="min-width:${chartWidth}px;width:100%;height:${svgHeight}px;--px-per-day:${pxPerDay}px">
           ${rowsHtml}
           ${connectorHtml}
           ${depsSvg}
