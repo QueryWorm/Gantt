@@ -64,6 +64,7 @@ def _row_to_segment(r) -> dict:
         "dept": r["dept"] or "",
         "assignee": r["assignee"] or "",
         "zero_day": r["zero_day"],
+        "starts_with": _json.loads(r["starts_with"]) if r["starts_with"] else [],
         "tpl_start": r["tpl_start"],
         "tpl_days": r["tpl_days"],
     }
@@ -199,15 +200,28 @@ def _rebuild_planned_starts(conn, bort_id: str, today_index: int = 0):
                     deps = _json.loads(s["depends_on"]) if s["depends_on"] else []
                 except (_json.JSONDecodeError, KeyError):
                     deps = []
+                try:
+                    ss = _json.loads(s["starts_with"]) if s["starts_with"] else []
+                except (_json.JSONDecodeError, KeyError):
+                    ss = []
                 max_end = 0
                 for d in deps:
                     pred = seg_map.get(d)
                     if pred:
                         max_end = max(max_end, constraint(pred, bool(s["zero_day"])))
+                max_ss = 0
+                for d in ss:
+                    pred = seg_map.get(d)
+                    if pred:
+                        # параллельный старт: не раньше дня начала предшественника
+                        max_ss = max(max_ss, pred["start"])
                 if s["status"] == "planned":
-                    if s["zero_day"]:
-                        # нулевой день — жёсткая привязка: старт точно в день
-                        # окончания предшественника, откат разрешён
+                    if bool(ss):
+                        # параллельный старт — привязка к началу предшественника,
+                        # вне последовательности (natural не применяется)
+                        new_start = max(max_ss, max_end)
+                    elif bool(deps) or bool(s["zero_day"]):
+                        # явная связь — жёсткая привязка: откат разрешён
                         new_start = max(natural, max_end)
                     else:
                         # обычный режим: движение только вперёд
@@ -442,6 +456,9 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
         if req.zero_day is not None:
             updates.append("zero_day = ?"); params.append(1 if req.zero_day else 0)
             changes["zero_day"] = req.zero_day
+        if req.starts_with is not None:
+            updates.append("starts_with = ?"); params.append(_json.dumps(req.starts_with))
+            changes["starts_with"] = req.starts_with
 
         if not updates:
             raise HTTPException(400, "nothing to update")

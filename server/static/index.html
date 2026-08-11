@@ -135,6 +135,7 @@
   @keyframes dep-pulse{0%,100%{opacity:.55;}50%{opacity:.95;}}
   .dep-line{cursor:pointer;pointer-events:stroke;}
   .dep-line:hover{stroke-width:3;opacity:1;}
+  .ss-line{stroke:var(--accent);opacity:.65;stroke-dasharray:2 2;}
   .seg-highlight{outline:2px solid var(--accent);outline-offset:2px;z-index:4;position:relative;}
 
   /* режим выбора цели для зависимости */
@@ -659,6 +660,24 @@ function renderCard(bort, idx, sharedAxisTotal, isTemplate=false){
       });
     });
   });
+  const ssLines = [];
+  bort.tracks.forEach((t, ti) => {
+    t.segments.forEach(s => {
+      if (!s.starts_with || !s.starts_with.length) return;
+      s.starts_with.forEach(predId => {
+        const pred = segMap.get(predId);
+        const dep = segMap.get(s.id);
+        if (!pred || !dep) return;
+        const x1 = pred.x_start;
+        const y1 = pred.y;
+        const x2 = dep.x_start;
+        const y2 = dep.y;
+        const midX = x1 + Math.max(8, (x2 - x1) / 2);
+        const path = `M ${x1} ${y1} H ${midX} V ${y2} H ${x2}`;
+        ssLines.push(`<path d="${path}" class="dep-line ss-line" data-ss-from="${predId}" data-ss-to="${s.id}" marker-end="url(#arrow-${idx})"/>`);
+      });
+    });
+  });
   const depsSvg = `<svg class="deps-overlay" width="${chartWidth}" height="${svgHeight}" style="width:${chartWidth}px;height:${svgHeight}px">
     <defs>
       <marker id="arrow-${idx}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -666,6 +685,7 @@ function renderCard(bort, idx, sharedAxisTotal, isTemplate=false){
       </marker>
     </defs>
     ${depsLines.join("")}
+    ${ssLines.join("")}
   </svg>`;
 
   const stats = computeStats(bort);
@@ -961,8 +981,10 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx, segIdx){
     <div class="ctx-item" data-action="dept_seg"><span>Отдел: <span class="ctx-hint">${seg.dept || '—'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="assign_seg"><span>Исполнитель: <span class="ctx-hint">${seg.assignee || '—'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="set_deps"><span>Зависит от: <span class="ctx-hint">${(seg.depends_on && seg.depends_on.length) ? seg.depends_on.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
-    ${!isTpl ? `<div class="ctx-item" data-action="toggle_zero_day"><span>Нулевой день: <span class="ctx-hint">${seg.zero_day ? 'в день окончания' : 'следующий день'}</span></span><span class="ctx-hint">${seg.zero_day ? '✓' : ''}</span></div>` : ""}
+    ${!isTpl ? `<div class="ctx-item" data-action="toggle_zero_day"><span>Нулевой день: <span class="ctx-hint">${seg.zero_day ? 'в день окончания' : 'следующий день'}</span></span><span class="ctx-hint">${seg.zero_day ? '✓' : ''}</span></div>
+    <div class="ctx-item" data-action="set_starts_with"><span>Стартует вместе с: <span class="ctx-hint">${(seg.starts_with && seg.starts_with.length) ? seg.starts_with.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>` : ""}
     <div class="ctx-item" data-action="pick_dep_target"><span>🔗 Тянуть зависимость от сюда</span></div>
+    ${!isTpl ? `<div class="ctx-item" data-action="pick_ss_target"><span>🔗 Тянуть параллельный старт от сюда</span></div>` : ""}
     <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
     <div class="ctx-sep"></div>
 
@@ -1109,7 +1131,29 @@ async function runCtxAction(action){
   }
   if (action === "pick_dep_target"){
     trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "pick_dep_target"});
-    enterDepPickMode(bortId, segId);
+    enterDepPickMode(bortId, segId, "dep");
+    return;
+  }
+  if (action === "pick_ss_target"){
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "pick_ss_target"});
+    enterDepPickMode(bortId, segId, "ss");
+    return;
+  }
+  if (action === "set_starts_with"){
+    const cur = (seg.starts_with || []).join(", ");
+    const v = prompt("ID задач, в день начала которых стартует эта (через запятую).\nПусто — без параллельного старта.", cur);
+    if (v === null) return;
+    const ids = v.split(",").map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0);
+    const validIds = [];
+    for (const tid of ids){
+      const found = bort.tracks.some(t => t.segments.some(s => s.id === tid));
+      if (found) validIds.push(tid);
+    }
+    trackEvent("context_action", `${bortId}/seg/${segId}`, {action: "set_starts_with", starts_with: validIds});
+    fetch(segUrl, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({starts_with: validIds, ...extraPatch, session_id: SESSION_ID})})
+      .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => { setStatus("параллельный старт обновлён"); seg.starts_with = validIds; renderAll(); })
+      .catch(err => setStatus("ошибка: " + err.message));
     return;
   }
   if (action === "toggle_zero_day"){
@@ -1580,10 +1624,22 @@ function bindDepPickMode(){
         exitDepPickMode();
         return;
       }
-      // добавляем targetId к depends_on источника
+      // добавляем targetId к depends_on источника (или starts_with для ss)
       const owner = containerById(sourceOwnerId);
       const segRef = owner && findSegById(owner, sourceId);
       if (!segRef){ exitDepPickMode(); return; }
+      const kind = window._depPickKind || "dep";
+      if (kind === "ss"){
+        if (isTemplateBort(sourceOwnerId)){ exitDepPickMode(); return; } // ss только для бортов
+        const ss = (segRef.starts_with || []).slice();
+        if (!ss.includes(targetId)) ss.push(targetId);
+        trackEvent("context_action", `${sourceOwnerId}/seg/${sourceId}`, {action: "set_starts_with", starts_with: ss, via: "drag"});
+        apiPatch(`/api/borts/${sourceOwnerId}/segments/${sourceId}`, {starts_with: ss}, "параллельный старт добавлен");
+        segRef.starts_with = ss;
+        exitDepPickMode();
+        renderAll();
+        return;
+      }
       const deps = (segRef.depends_on || []).slice();
       if (!deps.includes(targetId)) deps.push(targetId);
       trackEvent("context_action", `${sourceOwnerId}/seg/${sourceId}`, {action: "set_deps", deps, via: "drag"});
@@ -1616,11 +1672,14 @@ function findSegById(bort, segId){
   return null;
 }
 
-function enterDepPickMode(bortId, sourceSegId){
+function enterDepPickMode(bortId, sourceSegId, kind = "dep"){
   window._depPickSource = sourceSegId;
   window._depPickBortId = bortId;
+  window._depPickKind = kind;
   document.body.classList.add("dep-pick");
-  setStatus("режим выбора цели: кликните на сегмент (или Esc для отмены)");
+  setStatus(kind === "ss"
+    ? "режим параллельного старта: кликните на сегмент-предшественник (или Esc для отмены)"
+    : "режим выбора цели: кликните на сегмент (или Esc для отмены)");
   // прямая линия от источника к курсору
   const owner = containerById(bortId);
   if (!owner || !findSegById(owner, sourceSegId)) return;
@@ -1664,6 +1723,7 @@ function exitDepPickMode(){
   document.body.classList.remove("dep-pick");
   window._depPickSource = null;
   window._depPickBortId = null;
+  window._depPickKind = null;
   document.removeEventListener("mousemove", _depPickMousemove);
   document.removeEventListener("keydown", _depPickKeydown);
   const ov = document.getElementById("dep-pick-overlay");

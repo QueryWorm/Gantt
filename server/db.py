@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS segments (
     dept        TEXT NOT NULL DEFAULT '',
     assignee    TEXT NOT NULL DEFAULT '',
     zero_day    INTEGER NOT NULL DEFAULT 0,
+    starts_with TEXT NOT NULL DEFAULT '[]',
     tpl_start   INTEGER,
     tpl_days    INTEGER
 );
@@ -139,6 +140,9 @@ def init_db() -> None:
         # миграция: нулевой день (старт зависимой в день окончания предшественника)
         if "zero_day" not in scols:
             conn.execute("ALTER TABLE segments ADD COLUMN zero_day INTEGER NOT NULL DEFAULT 0")
+        # миграция: параллельный старт (старт в день начала предшественника, SS)
+        if "starts_with" not in scols:
+            conn.execute("ALTER TABLE segments ADD COLUMN starts_with TEXT NOT NULL DEFAULT '[]'")
         # миграция: план из шаблона (tpl_start/tpl_days) в segments если старая БД
         if "tpl_start" not in scols:
             conn.execute("ALTER TABLE segments ADD COLUMN tpl_start INTEGER")
