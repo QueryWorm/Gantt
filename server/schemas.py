@@ -16,6 +16,7 @@ class Segment(BaseModel):
     depends_on: list[int] = Field(default_factory=list)
     dept: str = ""
     assignee: str = ""
+    zero_day: int = 0
     tpl_start: Optional[int] = None
     tpl_days: Optional[int] = None
 
@@ -172,6 +173,7 @@ class SegmentPatchRequest(BaseModel):
     depends_on: Optional[list[int]] = None
     dept: Optional[str] = None
     assignee: Optional[str] = None
+    zero_day: Optional[int] = None
     today_index: int = 0
     session_id: str = ""
 

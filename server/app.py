@@ -63,22 +63,25 @@ def _row_to_segment(r) -> dict:
         "depends_on": depends_on,
         "dept": r["dept"] or "",
         "assignee": r["assignee"] or "",
+        "zero_day": r["zero_day"],
         "tpl_start": r["tpl_start"],
         "tpl_days": r["tpl_days"],
     }
 
 
-def _seg_last_day(start: int, days: int, status: str, today_index: int) -> int:
-    """Последний занятый день сегмента. Нулевой день: следующая задача
-    стартует в последний день предыдущей (start + days - 1), а не на
-    следующий день после конца. Active ещё идёт — её последний день это
-    сегодня. Не раньше фактического дня today_index."""
+def _constraint_start(start: int, days: int, status: str, today_index: int,
+                      zero_day: bool = False) -> int:
+    """День, в который может стартовать следующая задача после этого сегмента.
+    Обычный режим: на следующий день после окончания (start + days).
+    Нулевой день (zero_day=True): в день окончания (start + days - 1) — для
+    задач, зависимых, но сделанных в один день с предшественником.
+    Active ещё идёт — старт не раньше сегодня. Не раньше фактического дня."""
     days = max(0, days)
     if status == "active":
         return max(start + days, today_index)
     if days == 0:
         return start
-    return max(start + days - 1, today_index)
+    return max(start + days - (1 if zero_day else 0), today_index)
 
 
 def _row_to_track(r, segments: list[dict]) -> dict:
@@ -156,11 +159,11 @@ def _rebuild_planned_starts(conn, bort_id: str, today_index: int = 0):
     """Единый пересчёт start для всех planned-сегментов борта.
 
     Правило: start = max(текущий start, естественное место в треке,
-    последний занятый день предшественников). Естественное место — нулевой
-    день: сразу в последний день предыдущего сегмента того же трека
-    (start + days - 1); предшественники по depends_on — тоже последний
-    занятый день (не следующий после конца). Active: последний известный
-    день — сегодня.
+    день старта после предшественников). Естественное место — следующий день
+    после окончания предыдущего сегмента того же трека; предшественники по
+    depends_on — аналогично. Если у сегмента включён нулевой день (zero_day),
+    ограничения считаются как день окончания (start + days - 1), а не
+    следующий день. Active: старт не раньше сегодня.
 
     Движение ТОЛЬКО вперёд: сегменты, поставленные вручную дальше, не
     откатываются. Правило действует для ВСЕХ planned (не только с depends_on),
@@ -179,29 +182,19 @@ def _rebuild_planned_starts(conn, bort_id: str, today_index: int = 0):
     for r in segs:
         by_track.setdefault(r["track_id"], []).append(dict(r))
 
-    def end_of(s: dict) -> int:
-        """Последний занятый день. Нулевой день: следующая задача стартует в
-        последний день предыдущей (start + days - 1), а не на следующий день
-        после конца (start + days)."""
-        days = max(0, s["days"])
-        if s["status"] == "active":
-            # активная ещё идёт: последний известный день — сегодня; следующий
-            # стартует в тот же день (нулевой день активной)
-            return max(s["start"] + days, today_index)
-        if days == 0:
-            return s["start"]  # точка-старт заняла свой день
-        return s["start"] + days - 1
+    def constraint(s: dict, zero_day: bool) -> int:
+        return _constraint_start(s["start"], s["days"], s["status"], today_index, zero_day)
 
     shifted = 0
     for _round in range(100):
         any_change = False
         for track_segs in by_track.values():
-            prev_end = None
+            prev = None
             for s in track_segs:
-                if prev_end is None:
+                if prev is None:
                     natural = s["start"]
                 else:
-                    natural = max(prev_end, today_index)  # не раньше фактического дня
+                    natural = constraint(prev, bool(s["zero_day"]))
                 try:
                     deps = _json.loads(s["depends_on"]) if s["depends_on"] else []
                 except (_json.JSONDecodeError, KeyError):
@@ -210,22 +203,29 @@ def _rebuild_planned_starts(conn, bort_id: str, today_index: int = 0):
                 for d in deps:
                     pred = seg_map.get(d)
                     if pred:
-                        max_end = max(max_end, end_of(pred))
+                        max_end = max(max_end, constraint(pred, bool(s["zero_day"])))
                 if s["status"] == "planned":
-                    new_start = max(s["start"], natural, max_end)
+                    if s["zero_day"]:
+                        # нулевой день — жёсткая привязка: старт точно в день
+                        # окончания предшественника, откат разрешён
+                        new_start = max(natural, max_end)
+                    else:
+                        # обычный режим: движение только вперёд
+                        new_start = max(s["start"], natural, max_end)
                     if new_start != s["start"]:
                         conn.execute("UPDATE segments SET start = ? WHERE id = ?", (new_start, s["id"]))
                         s["start"] = new_start
                         shifted += 1
                         any_change = True
-                prev_end = end_of(s)
+                prev = s
         if not any_change:
             break
     return shifted
 
 
-def _natural_start_in_track(conn, track_id: int, seg_id: int, today_index: int) -> int | None:
-    """Естественный start сегмента в его треке: конец предыдущего сегмента по ord.
+def _natural_start_in_track(conn, track_id: int, seg_id: int, today_index: int,
+                            zero_day: bool = False) -> int | None:
+    """Естественный start сегмента в его треке: после предыдущего по ord.
     None — если сегмент первый в треке (естественное место не определено)."""
     prev = conn.execute(
         "SELECT start, days, status FROM segments "
@@ -236,7 +236,7 @@ def _natural_start_in_track(conn, track_id: int, seg_id: int, today_index: int) 
     ).fetchone()
     if not prev:
         return None
-    return _seg_last_day(prev["start"], prev["days"], prev["status"], today_index)
+    return _constraint_start(prev["start"], prev["days"], prev["status"], today_index, zero_day)
 
 
 def _shift_template_starts(out_segments: list[dict]) -> None:
@@ -439,6 +439,9 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
         if req.assignee is not None:
             updates.append("assignee = ?"); params.append(req.assignee)
             changes["assignee"] = req.assignee
+        if req.zero_day is not None:
+            updates.append("zero_day = ?"); params.append(1 if req.zero_day else 0)
+            changes["zero_day"] = req.zero_day
 
         if not updates:
             raise HTTPException(400, "nothing to update")
@@ -448,7 +451,8 @@ def patch_segment(bort_id: str, seg_id: int, req: SegmentPatchRequest):
 
         # сняли все зависимости → сегмент возвращается к "естественному" месту в треке
         if req.depends_on is not None and not req.depends_on and req.start is None:
-            natural = _natural_start_in_track(conn, seg["track_id"], seg_id, req.today_index)
+            natural = _natural_start_in_track(conn, seg["track_id"], seg_id, req.today_index,
+                                              bool(seg["zero_day"]))
             if natural is not None and seg["start"] != natural:
                 conn.execute("UPDATE segments SET start = ? WHERE id = ?", (natural, seg_id))
                 changes["start"] = natural
@@ -600,7 +604,7 @@ def add_bort_segment(bort_id: str, track_id: int, req: TrackSegmentRequest):
                 (track_id,),
             ).fetchone()
             if last:
-                start = _seg_last_day(last["start"], last["days"], last["status"], req.today_index)
+                start = _constraint_start(last["start"], last["days"], last["status"], req.today_index, False)
             else:
                 start = req.today_index
             max_ord = conn.execute(
