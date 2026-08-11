@@ -106,7 +106,9 @@ CREATE TABLE IF NOT EXISTS template_segments (
     assignee    TEXT NOT NULL DEFAULT '',
     depends_on  TEXT NOT NULL DEFAULT '[]',
     start       INTEGER NOT NULL DEFAULT -1,
-    ord         INTEGER NOT NULL DEFAULT 0
+    ord         INTEGER NOT NULL DEFAULT 0,
+    zero_day    INTEGER NOT NULL DEFAULT 0,
+    starts_with TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_tpl_segs_track ON template_segments(track_id, ord);
 """
@@ -192,6 +194,11 @@ def init_db() -> None:
             conn.execute("ALTER TABLE template_segments ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
         if "start" not in tscols:
             conn.execute("ALTER TABLE template_segments ADD COLUMN start INTEGER NOT NULL DEFAULT -1")
+        # миграция: нулевой день / параллельный старт для template_segments
+        if "zero_day" not in tscols:
+            conn.execute("ALTER TABLE template_segments ADD COLUMN zero_day INTEGER NOT NULL DEFAULT 0")
+        if "starts_with" not in tscols:
+            conn.execute("ALTER TABLE template_segments ADD COLUMN starts_with TEXT NOT NULL DEFAULT '[]'")
         conn.commit()
 
 

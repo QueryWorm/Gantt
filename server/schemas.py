@@ -99,6 +99,8 @@ class TemplateSegment(BaseModel):
     start: int = 0
     status: str = "planned"
     depends_on: list[int] = Field(default_factory=list)
+    zero_day: int = 0
+    starts_with: list[int] = Field(default_factory=list)
 
 
 class TemplateRequest(BaseModel):
@@ -154,6 +156,8 @@ class TemplateSegmentPatchRequest(BaseModel):
     assignee: Optional[str] = None
     depends_on: Optional[list[int]] = None
     start: Optional[int] = None
+    zero_day: Optional[int] = None
+    starts_with: Optional[list[int]] = None
     session_id: str = ""
 
 

@@ -981,10 +981,10 @@ function renderCtxMenu(bort, track, seg, idx, trackIdx, segIdx){
     <div class="ctx-item" data-action="dept_seg"><span>Отдел: <span class="ctx-hint">${seg.dept || '—'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="assign_seg"><span>Исполнитель: <span class="ctx-hint">${seg.assignee || '—'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="set_deps"><span>Зависит от: <span class="ctx-hint">${(seg.depends_on && seg.depends_on.length) ? seg.depends_on.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
-    ${!isTpl ? `<div class="ctx-item" data-action="toggle_zero_day"><span>Нулевой день: <span class="ctx-hint">${seg.zero_day ? 'в день окончания' : 'следующий день'}</span></span><span class="ctx-hint">${seg.zero_day ? '✓' : ''}</span></div>
-    <div class="ctx-item" data-action="set_starts_with"><span>Стартует вместе с: <span class="ctx-hint">${(seg.starts_with && seg.starts_with.length) ? seg.starts_with.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>` : ""}
+    <div class="ctx-item" data-action="toggle_zero_day"><span>Нулевой день: <span class="ctx-hint">${seg.zero_day ? 'в день окончания' : 'следующий день'}</span></span><span class="ctx-hint">${seg.zero_day ? '✓' : ''}</span></div>
+    <div class="ctx-item" data-action="set_starts_with"><span>Стартует вместе с: <span class="ctx-hint">${(seg.starts_with && seg.starts_with.length) ? seg.starts_with.map(x => '#'+x).join(', ') : 'нет'}</span></span><span class="ctx-hint">✎</span></div>
     <div class="ctx-item" data-action="pick_dep_target"><span>🔗 Тянуть зависимость от сюда</span></div>
-    ${!isTpl ? `<div class="ctx-item" data-action="pick_ss_target"><span>🔗 Тянуть параллельный старт от сюда</span></div>` : ""}
+    <div class="ctx-item" data-action="pick_ss_target"><span>🔗 Тянуть параллельный старт от сюда</span></div>
     <div class="ctx-item danger" data-action="del_seg"><span>Удалить сегмент</span></div>
     <div class="ctx-sep"></div>
 
@@ -1630,11 +1630,22 @@ function bindDepPickMode(){
       if (!segRef){ exitDepPickMode(); return; }
       const kind = window._depPickKind || "dep";
       if (kind === "ss"){
-        if (isTemplateBort(sourceOwnerId)){ exitDepPickMode(); return; } // ss только для бортов
         const ss = (segRef.starts_with || []).slice();
         if (!ss.includes(targetId)) ss.push(targetId);
         trackEvent("context_action", `${sourceOwnerId}/seg/${sourceId}`, {action: "set_starts_with", starts_with: ss, via: "drag"});
-        apiPatch(`/api/borts/${sourceOwnerId}/segments/${sourceId}`, {starts_with: ss}, "параллельный старт добавлен");
+        if (isTemplateBort(sourceOwnerId)){
+          const trackRef = owner.tracks.find(t => t.segments.some(s => s.id === sourceId));
+          fetch(API_BASE + `/api/templates/${sourceOwnerId}/tracks/${trackRef.id}/segments/${sourceId}`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({starts_with: ss, session_id: SESSION_ID}),
+          })
+            .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+            .then(() => { setStatus("параллельный старт добавлен"); renderAll(); })
+            .catch(err => setStatus("ошибка API: " + err.message));
+        } else {
+          apiPatch(`/api/borts/${sourceOwnerId}/segments/${sourceId}`, {starts_with: ss}, "параллельный старт добавлен");
+        }
         segRef.starts_with = ss;
         exitDepPickMode();
         renderAll();

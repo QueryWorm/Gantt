@@ -254,21 +254,47 @@ def _natural_start_in_track(conn, track_id: int, seg_id: int, today_index: int,
 
 
 def _shift_template_starts(out_segments: list[dict]) -> None:
-    """Для шаблонов: сдвигает синтезированные start по depends_on (все planned)."""
+    """Для шаблонов: пересчёт start по правилам бортов (depends_on/zero_day/starts_with).
+    Все сегменты planned, today_index=0."""
     by_id = {s["id"]: s for s in out_segments}
     rounds = 0
-    while rounds < 100:
+    while rounds < 200:
         any_change = False
         for s in out_segments:
             deps = s.get("depends_on") or []
-            if not deps:
-                continue
+            ss = s.get("starts_with") or []
+            zero_day = bool(s.get("zero_day"))
+            # natural: следующий по ord в том же треке
+            natural = 0
+            prev = None
+            for p in out_segments:
+                if p.get("_track") != s.get("_track"):
+                    continue
+                if p.get("_ord", 0) < s.get("_ord", 0) or (
+                    p.get("_ord", 0) == s.get("_ord", 0) and p["id"] < s["id"]
+                ):
+                    if prev is None or (p.get("_ord", 0), p["id"]) > (prev.get("_ord", 0), prev["id"]):
+                        prev = p
+            if prev is not None:
+                natural = max(prev["start"] + max(0, prev["days"]) - (1 if zero_day else 0), 0)
             max_end = 0
             for d in deps:
                 pred = by_id.get(d)
                 if pred:
-                    max_end = max(max_end, pred["start"] + max(0, pred["days"]))
-            new_start = max(s["start"], max_end)
+                    max_end = max(max_end, pred["start"] + max(0, pred["days"]) - (1 if zero_day else 0))
+            max_ss = 0
+            for d in ss:
+                pred = by_id.get(d)
+                if pred:
+                    max_ss = max(max_ss, pred["start"])
+            if ss:
+                # параллельный старт — вне последовательности
+                new_start = max(max_ss, max_end)
+            elif deps or zero_day:
+                # явная связь — жёсткая привязка
+                new_start = max(natural, max_end)
+            else:
+                new_start = max(s["start"], natural, max_end)
             if new_start != s["start"]:
                 s["start"] = new_start
                 any_change = True
@@ -799,6 +825,10 @@ def _load_template_full(conn, template_id: str) -> dict | None:
                 depends_on = _json.loads(s["depends_on"]) if s["depends_on"] else []
             except (_json.JSONDecodeError, KeyError):
                 depends_on = []
+            try:
+                starts_with = _json.loads(s["starts_with"]) if s["starts_with"] else []
+            except (_json.JSONDecodeError, KeyError):
+                starts_with = []
             if s["start"] >= 0:
                 seg_start = s["start"]
             else:
@@ -811,8 +841,12 @@ def _load_template_full(conn, template_id: str) -> dict | None:
                 "days": s["days"],
                 "status": "planned",
                 "depends_on": depends_on,
+                "zero_day": int(s["zero_day"] or 0),
+                "starts_with": starts_with,
                 "dept": s["dept"] or "",
                 "assignee": s["assignee"] or "",
+                "_ord": s["ord"],
+                "_track": t["id"],
             })
             track_cursor = seg_start + max(0, s["days"])
         out_tracks.append({
@@ -1024,6 +1058,14 @@ def patch_template_segment(template_id: str, track_id: int, seg_id: int, req: Te
             updates.append("depends_on = ?")
             params.append(_json.dumps(req.depends_on, ensure_ascii=False))
             changes["depends_on"] = req.depends_on
+        if req.zero_day is not None:
+            updates.append("zero_day = ?")
+            params.append(1 if req.zero_day else 0)
+            changes["zero_day"] = req.zero_day
+        if req.starts_with is not None:
+            updates.append("starts_with = ?")
+            params.append(_json.dumps(req.starts_with, ensure_ascii=False))
+            changes["starts_with"] = req.starts_with
         if req.start is not None:
             updates.append("start = ?"); params.append(max(-1, req.start)); changes["start"] = req.start
         if not updates:
@@ -1074,6 +1116,7 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
         ).fetchall()
         seg_id_map = {}
         pending_deps = []
+        pending_ss = []
         for t in tracks:
             max_track_ord += 1
             cur = conn.execute(
@@ -1096,10 +1139,10 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
                     start = track_cursor
                 days = max(0, int(s["days"]))
                 scur = conn.execute(
-                    "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee, tpl_start, tpl_days) "
-                    "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)",
+                    "INSERT INTO segments (track_id, kind, label, start, days, status, ord, dept, assignee, zero_day, tpl_start, tpl_days) "
+                    "VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?)",
                     (track_id, s["kind"], s["label"], start, days, s_idx,
-                     s["dept"] or "", s["assignee"] or "", start, days),
+                     s["dept"] or "", s["assignee"] or "", int(s["zero_day"] or 0), start, days),
                 )
                 seg_id_map[s["id"]] = scur.lastrowid
                 try:
@@ -1108,6 +1151,12 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
                     deps = []
                 if deps:
                     pending_deps.append((scur.lastrowid, deps))
+                try:
+                    ss_raw = _json.loads(s["starts_with"]) if s["starts_with"] else []
+                except (_json.JSONDecodeError, KeyError):
+                    ss_raw = []
+                if ss_raw:
+                    pending_ss.append((scur.lastrowid, ss_raw))
                 segs_added += 1
                 track_cursor += days
         # проставить зависимости с маппингом template_segment.id -> segments.id
@@ -1116,6 +1165,14 @@ def apply_template(bort_id: str, req: TemplateApplyRequest):
             if mapped:
                 conn.execute(
                     "UPDATE segments SET depends_on = ? WHERE id = ?",
+                    (_json.dumps(mapped), new_seg_id),
+                )
+        # проставить параллельный старт с маппингом id
+        for new_seg_id, ss in pending_ss:
+            mapped = [seg_id_map.get(d, d) for d in ss if d in seg_id_map]
+            if mapped:
+                conn.execute(
+                    "UPDATE segments SET starts_with = ? WHERE id = ?",
                     (_json.dumps(mapped), new_seg_id),
                 )
         # авто-сдвиг: зависимые сегменты стартуют после конца предшественников
